@@ -1,0 +1,18 @@
+{
+  "name": "session",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Connect Cursor and Claude coding sessions, play chess while building, settle cross-chain wagers",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev:relay": "pnpm --filter @session/relay dev",
+    "dev:web": "pnpm --filter @session/web dev",
+    "dev:core": "pnpm --filter @session/core build --watch",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.15.1"
+}
