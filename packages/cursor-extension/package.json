@@ -1,0 +1,109 @@
+{
+  "name": "session-ide",
+  "displayName": "Session",
+  "description": "Connect coding sessions and play chess in a Cursor/VS Code sidebar and board tab",
+  "version": "0.1.0",
+  "publisher": "session",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onView:session.sidebar",
+    "onCommand:session.openBoard",
+    "onCommand:session.connect"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "session",
+          "title": "Session",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "session": [
+        {
+          "type": "webview",
+          "id": "session.sidebar",
+          "name": "Lobby"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "session.connect",
+        "title": "Session: Connect to relay",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "session.openBoard",
+        "title": "Session: Open chess board",
+        "icon": "$(symbol-misc)"
+      },
+      {
+        "command": "session.createRoom",
+        "title": "Session: Create room"
+      },
+      {
+        "command": "session.refresh",
+        "title": "Session: Refresh",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "session.connect",
+          "when": "view == session.sidebar",
+          "group": "navigation"
+        },
+        {
+          "command": "session.openBoard",
+          "when": "view == session.sidebar",
+          "group": "navigation"
+        },
+        {
+          "command": "session.refresh",
+          "when": "view == session.sidebar",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Session",
+      "properties": {
+        "session.relayUrl": {
+          "type": "string",
+          "default": "ws://127.0.0.1:47831/ws",
+          "description": "WebSocket URL for the Session relay"
+        },
+        "session.displayName": {
+          "type": "string",
+          "default": "",
+          "description": "Display name in the lobby (blank = hostname)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "watch": "pnpm build --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package": "pnpm build && npx --yes @vscode/vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.0",
+    "esbuild": "^0.25.1",
+    "typescript": "^5.8.2"
+  }
+}
