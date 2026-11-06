@@ -1,0 +1,16 @@
+{
+  "name": "session-local",
+  "owner": {
+    "name": "Session"
+  },
+  "metadata": {
+    "description": "Local marketplace catalog for the Session Claude mod during development"
+  },
+  "plugins": [
+    {
+      "name": "session",
+      "source": "./claude-mod",
+      "description": "Connect Claude Code sessions to Cursor or Claude peers, play chess while building"
+    }
+  ]
+}

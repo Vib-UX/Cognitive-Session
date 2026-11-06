@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "session": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/session-mcp.js"],
+      "env": {
+        "SESSION_HOST": "claude",
+        "SESSION_RELAY_URL": "ws://127.0.0.1:47831/ws"
+      }
+    }
+  }
+}

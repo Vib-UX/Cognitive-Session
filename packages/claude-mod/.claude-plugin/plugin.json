@@ -1,0 +1,21 @@
+{
+  "name": "session",
+  "version": "0.1.0",
+  "description": "Connect your Claude Code session to another live Cursor or Claude session. Nearby discovery, lobby, room codes, chess while you build.",
+  "author": {
+    "name": "Session"
+  },
+  "userConfig": {
+    "display_name": {
+      "type": "string",
+      "title": "Display name",
+      "description": "How other sessions see you in the lobby",
+      "default": "claude"
+    },
+    "relay_url": {
+      "type": "string",
+      "title": "Relay WebSocket URL",
+      "default": "ws://127.0.0.1:47831/ws"
+    }
+  }
+}
