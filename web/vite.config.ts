@@ -6,8 +6,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/presence": "http://127.0.0.1:47831",
-      "/health": "http://127.0.0.1:47831",
+      "/presence": "https://sessionrelay-production.up.railway.app",
+      "/health": "https://sessionrelay-production.up.railway.app",
     },
   },
 });

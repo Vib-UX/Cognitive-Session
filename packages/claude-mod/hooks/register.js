@@ -8,7 +8,7 @@
  */
 
 const PANE = "session";
-const RELAY_HTTP = process.env.SESSION_RELAY_HTTP ?? "http://127.0.0.1:47831";
+const RELAY_HTTP = process.env.SESSION_RELAY_HTTP ?? "https://sessionrelay-production.up.railway.app";
 
 let tab = "people";
 let roomCodeInput = "";

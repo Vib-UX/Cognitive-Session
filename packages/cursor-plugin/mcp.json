@@ -5,7 +5,8 @@
       "args": ["/Users/btc/session/packages/core/dist/mcp/cli.js"],
       "env": {
         "SESSION_HOST": "cursor",
-        "SESSION_RELAY_URL": "ws://127.0.0.1:47831/ws",
+        "SESSION_RELAY_URL": "wss://sessionrelay-production.up.railway.app/ws",
+        "SESSION_RELAY_HTTP": "https://sessionrelay-production.up.railway.app",
         "SESSION_DISPLAY_NAME": "cursor-local"
       }
     }

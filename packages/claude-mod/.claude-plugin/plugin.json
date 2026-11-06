@@ -15,7 +15,7 @@
     "relay_url": {
       "type": "string",
       "title": "Relay WebSocket URL",
-      "default": "ws://127.0.0.1:47831/ws"
+      "default": "wss://sessionrelay-production.up.railway.app/ws"
     }
   }
 }

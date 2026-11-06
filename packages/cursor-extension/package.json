@@ -79,7 +79,7 @@
       "properties": {
         "session.relayUrl": {
           "type": "string",
-          "default": "ws://127.0.0.1:47831/ws",
+          "default": "wss://sessionrelay-production.up.railway.app/ws",
           "description": "WebSocket URL for the Session relay"
         },
         "session.displayName": {

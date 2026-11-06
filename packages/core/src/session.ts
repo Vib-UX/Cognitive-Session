@@ -40,7 +40,7 @@ export class SessionClient {
     const url =
       opts.relayUrl ??
       process.env.SESSION_RELAY_URL ??
-      "ws://127.0.0.1:47831/ws";
+      "wss://sessionrelay-production.up.railway.app/ws";
     this.relay = new RelayClient(url, this.identity);
     this.nearby = new NearbyDiscovery();
     this.mdnsEnabled = opts.enableMdns !== false;
