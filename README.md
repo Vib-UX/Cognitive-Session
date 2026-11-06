@@ -94,6 +94,8 @@ TREASURY_MAX_UNITS=3000000
 - Send 0.05 USDC to the owner wallet on Optimism: https://basescan.org/tx/0x6454caca63b294101920e33a01b628910e54e0dc171719f30af43e54c12a4696
 - CCIP message: https://ccip.chain.link/msg/0xffa95e81e2a89a55f2f9352e7930f07c97157646558135c5000d420e81cf915d
 
+That send is a CCIP 2.0 message. Chainlink’s message API returns `version` `2.0.0` for `0xffa95e81e2a89a55f2f9352e7930f07c97157646558135c5000d420e81cf915d`. The Base transaction calls router `0x881e3A65B4d4a04dD529061dd0071cf975F58bCD`, the same entrypoint Base has used since earlier CCIP lanes, so a block explorer still labels it as the original router. This message is routed through OnRamp `0xF75bf16b03aaE98677926F0987F195A2153996B9`, which emits the v2 `CCIPMessageSent` log. The extra args are GenericExtraArgsV3, and the verifier on the message is the CCTP verifier.
+
 The Cursor Credits card lists each successful claim with its Base transaction.
 
 ### CCIP Local Simulator
@@ -163,4 +165,4 @@ pnpm --filter session-ide build
 - ENSv2 — session subnames
 - Arkiv — lobby / match entities
 - 0G Storage — finished match records
-- Chainlink CCIP 2.0 — Base mainnet USDC treasury, plus the Base Sepolia → Ethereum Sepolia wager. Local coverage includes Chainlink's CCIP Local Simulator.
+- Chainlink CCIP 2.0 — Base mainnet USDC treasury. The Base → Optimism claim above is lane version 2.0.0, sent through the existing Base router to the v2 OnRamp. Local coverage includes Chainlink's CCIP Local Simulator.
