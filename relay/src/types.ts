@@ -1,4 +1,4 @@
-export type HostKind = "cursor" | "claude";
+export type HostKind = "cursor" | "claude" | "web";
 export type SessionId = `sess_${string}`;
 
 export interface SessionIdentity {
@@ -71,6 +71,57 @@ export interface ChallengeInfo {
   expiresAt: number;
 }
 
+export type SnakeDir = "up" | "down" | "left" | "right";
+
+export interface SnakePoint {
+  x: number;
+  y: number;
+}
+
+export interface SnakePlayer {
+  id: SessionId;
+  name: string;
+  color: string;
+  body: SnakePoint[];
+  dir: SnakeDir;
+  pendingDir: SnakeDir;
+  alive: boolean;
+  connected: boolean;
+  score: number;
+  boost: boolean;
+  deadAt: number | null;
+}
+
+export interface SnakePellet {
+  id: number;
+  x: number;
+  y: number;
+  value: number;
+}
+
+export interface SnakeResult {
+  kind: "win" | "draw";
+  winner?: SessionId;
+  reason: "score" | "last";
+  scores: { id: SessionId; name: string; score: number }[];
+}
+
+/** Realtime arena shared by everyone in a room. */
+export interface SnakeState {
+  matchId: string;
+  roomCode: string;
+  width: number;
+  height: number;
+  tick: number;
+  pelletSeq: number;
+  players: SnakePlayer[];
+  pellets: SnakePellet[];
+  status: "waiting" | "active" | "finished";
+  startedAt: number | null;
+  endsAt: number | null;
+  result?: SnakeResult;
+}
+
 export type ClientMessage =
   | { type: "hello"; identity: SessionIdentity }
   | { type: "heartbeat" }
@@ -85,7 +136,10 @@ export type ClientMessage =
   | { type: "next" }
   | { type: "poll" }
   | { type: "set_match_meta"; matchId: string; lockTx?: string; ccipMessageId?: string; payoutTx?: string; status?: ChessState["status"] }
-  | { type: "claim_reward"; amount: string };
+  | { type: "claim_reward"; amount: string }
+  | { type: "snake_join"; code?: string }
+  | { type: "snake_steer"; matchId: string; dir: SnakeDir; boost?: boolean }
+  | { type: "snake_leave" };
 
 export type ServerMessage =
   | { type: "welcome"; identity: SessionIdentity; peers: PeerInfo[]; room: RoomInfo | null }
@@ -105,7 +159,9 @@ export type ServerMessage =
       pings: PingMessage[];
       match: ChessState | null;
       challenges: ChallengeInfo[];
-    };
+      snake: SnakeState | null;
+    }
+  | { type: "snake"; match: SnakeState };
 
 export interface PresenceSnapshot {
   peers: PeerInfo[];
@@ -113,4 +169,5 @@ export interface PresenceSnapshot {
   recentPings: PingMessage[];
   matches: ChessState[];
   challenges: ChallengeInfo[];
+  snakes: SnakeState[];
 }

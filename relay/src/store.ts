@@ -3,6 +3,14 @@ import type WebSocket from "ws";
 import { syncEntity } from "./arkiv-sync.js";
 import { payReward } from "./treasury.js";
 import { applyMove, applyResign, checkTimeout, createMatch } from "./chess.js";
+import {
+  PUBLIC_SNAKE_ROOM,
+  createSnakeMatch,
+  disconnectSnake,
+  joinSnake,
+  setSnakeHeading,
+  tickSnake,
+} from "./snake.js";
 import type {
   ChallengeInfo,
   ChessState,
@@ -14,6 +22,8 @@ import type {
   ServerMessage,
   SessionId,
   SessionIdentity,
+  SnakeDir,
+  SnakeState,
 } from "./types.js";
 
 interface Conn {
@@ -37,6 +47,8 @@ export class RelayStore {
   private rooms = new Map<string, RoomInfo>();
   private pings: PingMessage[] = [];
   private matches = new Map<string, ChessState>();
+  private snakes = new Map<string, SnakeState>();
+  private snakeByRoom = new Map<string, string>();
   /** FIFO of sessions that pressed Next and are waiting for a partner. */
   private queue: SessionId[] = [];
   challenges = new Map<string, ChallengeInfo>();
@@ -50,6 +62,7 @@ export class RelayStore {
     if (!conn) return;
     if (conn.identity) {
       this.queue = this.queue.filter((id) => id !== conn.identity!.id);
+      this.dropSnakePlayer(conn.identity.id);
       this.byId.delete(conn.identity.id);
       if (conn.roomCode) this.leaveRoom(conn);
     }
@@ -114,6 +127,15 @@ export class RelayStore {
           break;
         case "claim_reward":
           void this.onClaim(conn, msg.amount);
+          break;
+        case "snake_join":
+          this.onSnakeJoin(conn, msg.code);
+          break;
+        case "snake_steer":
+          this.onSnakeSteer(conn, msg.matchId, msg.dir, msg.boost ?? false);
+          break;
+        case "snake_leave":
+          this.onSnakeLeave(conn);
           break;
         default:
           this.send(ws, { type: "error", message: "Unknown message type" });
@@ -210,6 +232,7 @@ export class RelayStore {
 
   private leaveRoom(conn: Conn): void {
     if (!conn.roomCode || !conn.identity) return;
+    this.dropSnakePlayer(conn.identity.id);
     const room = this.rooms.get(conn.roomCode);
     if (room) {
       room.members = room.members.filter((id) => id !== conn.identity!.id);
@@ -222,6 +245,98 @@ export class RelayStore {
       }
     }
     conn.roomCode = null;
+  }
+
+  private onSnakeJoin(conn: Conn, code?: string): void {
+    if (!conn.identity) throw new Error("Say hello first");
+    if (code?.trim()) this.placeInRoom(conn, code);
+    else if (!conn.roomCode) this.placeInRoom(conn, PUBLIC_SNAKE_ROOM);
+    if (!conn.roomCode) throw new Error("Create or join a room first");
+    const now = Date.now();
+    let match = this.currentSnake(conn.roomCode);
+    if (!match || match.status === "finished") {
+      match = createSnakeMatch(conn.roomCode);
+      this.snakes.set(match.matchId, match);
+      this.snakeByRoom.set(conn.roomCode, match.matchId);
+    }
+    joinSnake(match, conn.identity.id, conn.identity.displayName, now);
+    this.broadcastSnake(match);
+  }
+
+  private onSnakeSteer(conn: Conn, matchId: string, dir: SnakeDir, boost: boolean): void {
+    if (!conn.identity) throw new Error("Say hello first");
+    const dirs: SnakeDir[] = ["up", "down", "left", "right"];
+    if (!dirs.includes(dir)) {
+      throw new Error("Direction must be up, down, left, or right");
+    }
+    const match = this.snakes.get(matchId);
+    if (!match) throw new Error("Snake match not found");
+    setSnakeHeading(match, conn.identity.id, dir, boost);
+    this.broadcastSnake(match);
+  }
+
+  private onSnakeLeave(conn: Conn): void {
+    if (!conn.identity) throw new Error("Say hello first");
+    this.dropSnakePlayer(conn.identity.id);
+  }
+
+  private currentSnake(roomCode: string): SnakeState | undefined {
+    const id = this.snakeByRoom.get(roomCode);
+    return id ? this.snakes.get(id) : undefined;
+  }
+
+  private dropSnakePlayer(id: SessionId): void {
+    for (const [matchId, match] of this.snakes) {
+      if (!match.players.some((player) => player.id === id)) continue;
+      const outcome = disconnectSnake(match, id, Date.now());
+      if (outcome === "remove") {
+        this.snakes.delete(matchId);
+        if (this.snakeByRoom.get(match.roomCode) === matchId) this.snakeByRoom.delete(match.roomCode);
+        const conn = this.byId.get(id);
+        if (conn) this.send(conn.ws, { type: "snake", match });
+        continue;
+      }
+      this.broadcastSnake(match);
+    }
+  }
+
+  /** Step every live arena. Called on a fixed interval by the relay process. */
+  tickSnakes(now = Date.now()): void {
+    for (const match of this.snakes.values()) {
+      if (match.status !== "active") continue;
+      tickSnake(match, now);
+      this.broadcastSnake(match);
+    }
+    const finished = [...this.snakes.values()].filter((match) => match.status === "finished");
+    while (finished.length > 6) {
+      const old = finished.shift();
+      if (!old) break;
+      this.snakes.delete(old.matchId);
+      if (this.snakeByRoom.get(old.roomCode) === old.matchId) this.snakeByRoom.delete(old.roomCode);
+    }
+  }
+
+  private snakeFor(conn: Conn): SnakeState | null {
+    if (!conn.identity) return null;
+    if (conn.roomCode) {
+      const current = this.currentSnake(conn.roomCode);
+      if (current) return current;
+    }
+    for (const match of [...this.snakes.values()].reverse()) {
+      if (match.players.some((player) => player.id === conn.identity!.id)) return match;
+    }
+    return null;
+  }
+
+  private broadcastSnake(match: SnakeState): void {
+    const payload: ServerMessage = { type: "snake", match };
+    const ids = new Set<SessionId>(match.players.map((player) => player.id));
+    const room = this.rooms.get(match.roomCode);
+    if (room) for (const id of room.members) ids.add(id);
+    for (const id of ids) {
+      const conn = this.byId.get(id);
+      if (conn) this.send(conn.ws, payload);
+    }
   }
 
   private onPing(conn: Conn, to: SessionId, text: string): void {
@@ -307,14 +422,20 @@ export class RelayStore {
 
   private placeInRoom(conn: Conn, code: string): void {
     if (!conn.identity) return;
-    const room = this.rooms.get(code);
-    if (!room) return;
-    if (conn.roomCode && conn.roomCode !== code) this.leaveRoom(conn);
-    if (!room.members.includes(conn.identity.id)) {
-      room.members.push(conn.identity.id);
+    const normalized = code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+    if (!normalized) return;
+    if (conn.roomCode && conn.roomCode !== normalized) this.leaveRoom(conn);
+    let room = this.rooms.get(normalized);
+    if (!room) {
+      room = { code: normalized, members: [], createdAt: Date.now(), matchId: null };
+      this.rooms.set(normalized, room);
     }
-    conn.roomCode = code;
-    this.send(conn.ws, { type: "room", room });
+    if (!room.members.includes(conn.identity.id)) room.members.push(conn.identity.id);
+    conn.roomCode = normalized;
+    for (const id of room.members) {
+      const member = this.byId.get(id);
+      if (member) this.send(member.ws, { type: "room", room });
+    }
     this.broadcastPeers();
   }
 
@@ -476,6 +597,7 @@ export class RelayStore {
         (p) => p.to === conn.identity!.id || p.from === conn.identity!.id,
       ),
       match,
+      snake: this.snakeFor(conn),
       challenges: [...this.challenges.values()].filter(
         (c) => c.to === conn.identity!.id || c.from === conn.identity!.id,
       ),
@@ -596,6 +718,7 @@ export class RelayStore {
       recentPings: this.pings.slice(-20),
       matches: [...this.matches.values()],
       challenges: [...this.challenges.values()],
+      snakes: [...this.snakes.values()],
     };
   }
 }

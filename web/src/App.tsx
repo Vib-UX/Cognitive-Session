@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Chessboard } from "react-chessboard";
 import type { PresenceSnapshot } from "./types";
+import { SnakeArena } from "./SnakeArena";
 import { WalletPanel } from "./WalletPanel";
 
 const RELAY_HTTP = import.meta.env.VITE_RELAY_HTTP ?? "";
@@ -50,12 +51,14 @@ export function App() {
         <div>
           <h1>Session</h1>
           <p className="sub">
-            Live presence for Cursor and Claude coding sessions. Same Wi-Fi, lobby, room
-            code, then a ping proves the connection.
+            Live presence for Cursor and Claude coding sessions. Share a room, then play
+            snakes or chess.
           </p>
         </div>
         <div className="live">{error ? `relay: ${error}` : "relay live"}</div>
       </div>
+
+      <SnakeArena />
 
       <div className="grid">
         <section className="panel">

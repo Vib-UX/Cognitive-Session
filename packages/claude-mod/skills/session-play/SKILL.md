@@ -13,5 +13,6 @@ Use the Session MCP tools and the `/session` pane. Chess is played in this IDE �
 4. `session_ping` — prove the connection
 5. `session_poll` — challenges, match, board
 6. Chess: `session_challenge`, `session_respond`, `session_move`, `session_resign`
+7. Snakes: `session_snake_join` (optional `code`; omit it to share the open arena), then `session_snake_steer` (`up` / `down` / `left` / `right`, optional `boost`). The relay moves the arena. Highest score after 90 seconds wins. `session_snake_leave` exits.
 
-Keep building as the main task. Handle chess only when a challenge or turn is waiting.
+Keep building as the main task. Handle chess only when a challenge or turn is waiting. Steer a snake when the user asked to play.

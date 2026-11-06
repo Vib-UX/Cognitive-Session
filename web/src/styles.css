@@ -30,7 +30,7 @@ body {
 }
 
 #root {
-  max-width: 1100px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 2rem 1.25rem 4rem;
 }
@@ -117,6 +117,11 @@ h1 {
 .badge.claude {
   background: rgba(240, 171, 252, 0.15);
   color: var(--claude);
+}
+
+.badge.web {
+  background: rgba(94, 234, 212, 0.15);
+  color: var(--accent);
 }
 
 .badge.nearby {
@@ -233,4 +238,139 @@ label {
   font-size: 0.85rem;
   color: var(--muted);
   margin-bottom: 0.75rem;
+}
+
+.snake-panel {
+  margin-bottom: 1rem;
+}
+
+.snake-intro p {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+.snake-join {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.snake-join label {
+  margin: 0;
+}
+
+.snake-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 1rem;
+  align-items: start;
+}
+
+.snake-canvas {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  display: block;
+  background: #070b10;
+  border: 1px solid var(--border);
+  touch-action: none;
+}
+
+.snake-side {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.room-code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 1.8rem;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+}
+
+.snake-status {
+  color: var(--muted);
+}
+
+.scores {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.scores li {
+  display: grid;
+  grid-template-columns: 0.7rem 1fr auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.scores li.me span {
+  color: white;
+}
+
+.scores i {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  display: block;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0.6rem 0 0;
+}
+
+.snake-error {
+  color: var(--danger);
+  margin: 0.8rem 0 0;
+}
+
+.dpad {
+  display: none;
+  grid-template-columns: repeat(3, 56px);
+  gap: 0.35rem;
+  justify-content: center;
+  margin-top: 0.75rem;
+}
+
+.dpad .up {
+  grid-column: 2;
+}
+
+.dpad .left {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.dpad .boost {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.dpad .right {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.dpad .down {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+@media (max-width: 800px) {
+  .snake-join,
+  .snake-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dpad {
+    display: grid;
+  }
 }

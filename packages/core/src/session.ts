@@ -99,6 +99,10 @@ export class SessionClient {
     return this.relay.match;
   }
 
+  snake() {
+    return this.relay.snake;
+  }
+
   challenges(): ChallengeInfo[] {
     return this.relay.challenges;
   }
@@ -129,6 +133,7 @@ export class SessionClient {
       room: this.room(),
       pings: this.pings(),
       match: this.match(),
+      snake: this.snake(),
       challenges: this.challenges(),
       nearby: this.nearby.list(),
     };

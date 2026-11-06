@@ -1,4 +1,4 @@
-export type HostKind = "cursor" | "claude";
+export type HostKind = "cursor" | "claude" | "web";
 export type SessionId = `sess_${string}`;
 
 export interface PeerInfo {
@@ -56,10 +56,58 @@ export interface ChallengeInfo {
   expiresAt: number;
 }
 
+export type SnakeDir = "up" | "down" | "left" | "right";
+
+export interface SnakePoint {
+  x: number;
+  y: number;
+}
+
+export interface SnakePlayer {
+  id: SessionId;
+  name: string;
+  color: string;
+  body: SnakePoint[];
+  dir: SnakeDir;
+  pendingDir: SnakeDir;
+  alive: boolean;
+  connected: boolean;
+  score: number;
+  boost: boolean;
+  deadAt: number | null;
+}
+
+export interface SnakePellet {
+  id: number;
+  x: number;
+  y: number;
+  value: number;
+}
+
+export interface SnakeState {
+  matchId: string;
+  roomCode: string;
+  width: number;
+  height: number;
+  tick: number;
+  players: SnakePlayer[];
+  pellets: SnakePellet[];
+  status: "waiting" | "active" | "finished";
+  startedAt: number | null;
+  endsAt: number | null;
+  result?: {
+    kind: "win" | "draw";
+    winner?: SessionId;
+    reason: "score" | "last";
+    scores: { id: SessionId; name: string; score: number }[];
+  };
+}
+
 export interface PresenceSnapshot {
   peers: PeerInfo[];
   rooms: RoomInfo[];
   recentPings: PingMessage[];
   matches: ChessState[];
   challenges: ChallengeInfo[];
+  snakes?: SnakeState[];
 }

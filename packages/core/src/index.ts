@@ -6,3 +6,4 @@ export * from "./session.js";
 export * from "./ens-local.js";
 export * from "./arkiv.js";
 export * from "./board.js";
+export * from "./snake-board.js";

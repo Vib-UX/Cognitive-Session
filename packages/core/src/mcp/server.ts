@@ -2,8 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { matchSummary } from "../board.js";
+import { renderSnake } from "../snake-board.js";
 import { SessionClient } from "../session.js";
-import type { ChessState, HostKind, ServerMessage } from "../types.js";
+import type { ChessState, HostKind, ServerMessage, SnakeDir, SnakeState } from "../types.js";
 
 export interface McpServerOptions {
   host: HostKind;
@@ -41,8 +42,13 @@ export async function createSessionMcpServer(opts: McpServerOptions) {
     return text(`${board}\n\n---\n${payload}`);
   };
 
-  const withMatchBoard = (match: ChessState | null | undefined, value: unknown) =>
-    json(value, match ? matchSummary(match) : null);
+  const boardFor = (match?: ChessState | null, snake?: SnakeState | null) => {
+    const parts = [match ? matchSummary(match) : "", snake ? renderSnake(snake) : ""].filter(Boolean);
+    return parts.length ? parts.join("\n\n") : null;
+  };
+
+  const withBoards = (value: unknown, match?: ChessState | null, snake?: SnakeState | null) =>
+    json(value, boardFor(match, snake));
 
   server.tool(
     "session_me",
@@ -93,11 +99,11 @@ export async function createSessionMcpServer(opts: McpServerOptions) {
 
   server.tool(
     "session_poll",
-    "Poll for peers, room, pings, challenges, and the active chess match. Includes an in-IDE board when a match is active.",
+    "Poll for peers, room, pings, challenges, the chess match, and the snake arena. Includes an in-IDE board when a game is active.",
     {},
     async () => {
       const poll = session.poll();
-      return withMatchBoard(poll.match, poll);
+      return withBoards(poll, poll.match, poll.snake);
     },
   );
 
@@ -131,6 +137,50 @@ export async function createSessionMcpServer(opts: McpServerOptions) {
   );
 
   server.tool(
+    "session_snake_join",
+    "Join the snakes arena. Omit the room code to enter the shared OPEN arena with everyone else who did the same. Pass a code to start or join a private room. The second player starts a 90 second round.",
+    {
+      code: z
+        .string()
+        .optional()
+        .describe("Optional room code. Omit to join the shared arena."),
+    },
+    async ({ code }) => {
+      const msg = await session.relay.snakeJoinAsync(code);
+      const snake = msg.type === "snake" ? msg.match : null;
+      return withBoards(msg, null, snake);
+    },
+  );
+
+  server.tool(
+    "session_snake_steer",
+    "Set your snake's heading. The arena keeps moving on the relay. You cannot reverse 180 degrees. Hold boost to move twice as fast while longer than 10; boosting sheds tail pellets.",
+    {
+      dir: z.enum(["up", "down", "left", "right"]).describe("New heading"),
+      boost: z.boolean().optional().describe("Speed boost. Costs length while you are long enough."),
+      matchId: z.string().optional().describe("Snake match id. Defaults to the current arena."),
+    },
+    async ({ dir, boost, matchId }) => {
+      const id = matchId ?? session.snake()?.matchId;
+      if (!id) throw new Error("No snake match. Call session_snake_join first.");
+      const msg = await session.relay.snakeSteerAsync(id, dir as SnakeDir, boost ?? false);
+      const snake = msg.type === "snake" ? msg.match : null;
+      return withBoards(msg, null, snake);
+    },
+  );
+
+  server.tool(
+    "session_snake_leave",
+    "Leave the snake arena. If a round is live and you were the opponent, the other player wins.",
+    {},
+    async () => {
+      const msg = await session.relay.snakeLeaveAsync();
+      const snake = msg.type === "snake" ? msg.match : session.snake();
+      return withBoards(msg, null, snake);
+    },
+  );
+
+  server.tool(
     "session_move",
     "Play a chess move in UCI form (e.g. e2e4). Returns the updated board for the IDE — do not open external links.",
     {
@@ -151,7 +201,7 @@ export async function createSessionMcpServer(opts: McpServerOptions) {
       const msg = await session.relay.request("match", () =>
         session.relay.resign(matchId),
       );
-      return json(msg, boardFromMessage(msg));
+      return withBoards(msg, msg.type === "match" ? msg.match : null, null);
     },
   );
 

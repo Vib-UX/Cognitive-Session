@@ -8,6 +8,8 @@ import type {
   RoomInfo,
   ServerMessage,
   SessionIdentity,
+  SnakeDir,
+  SnakeState,
 } from "./types.js";
 
 export type RelayEventHandler = (msg: ServerMessage) => void;
@@ -28,6 +30,7 @@ export class RelayClient {
   room: RoomInfo | null = null;
   pings: PingMessage[] = [];
   match: ChessState | null = null;
+  snake: SnakeState | null = null;
   challenges: ChallengeInfo[] = [];
   connected = false;
 
@@ -154,11 +157,15 @@ export class RelayClient {
       case "match":
         this.match = msg.match;
         break;
+      case "snake":
+        this.snake = msg.match;
+        break;
       case "poll_state":
         this.peers = msg.peers;
         this.room = msg.room;
         this.pings = msg.pings;
         this.match = msg.match;
+        this.snake = msg.snake ?? null;
         this.challenges = msg.challenges;
         break;
       default:
@@ -181,6 +188,13 @@ export class RelayClient {
       }, timeoutMs);
 
       const off = this.on((msg) => {
+        if (msg.type === "error") {
+          clearTimeout(timer);
+          this.pending.delete(key);
+          off();
+          reject(new Error(msg.message));
+          return;
+        }
         if (msg.type !== type) return;
         if (predicate && !predicate(msg)) return;
         clearTimeout(timer);
@@ -240,6 +254,18 @@ export class RelayClient {
     this.send({ type: "poll" });
   }
 
+  snakeJoin(code?: string): void {
+    this.send(code ? { type: "snake_join", code } : { type: "snake_join" });
+  }
+
+  snakeSteer(matchId: string, dir: SnakeDir, boost = false): void {
+    this.send({ type: "snake_steer", matchId, dir, boost });
+  }
+
+  snakeLeave(): void {
+    this.send({ type: "snake_leave" });
+  }
+
   createRoomAsync(): Promise<ServerMessage> {
     return this.request("room", () => this.createRoom());
   }
@@ -258,6 +284,41 @@ export class RelayClient {
 
   respondChallengeAsync(challengeId: string, accept: boolean): Promise<ServerMessage> {
     return this.request("challenge_resolved", () => this.respondChallenge(challengeId, accept));
+  }
+
+  snakeJoinAsync(code?: string): Promise<ServerMessage> {
+    return this.request(
+      "snake",
+      () => this.snakeJoin(code),
+      8000,
+      (msg) => msg.type === "snake" && msg.match.players.some((player) => player.id === this.identity.id),
+    );
+  }
+
+  snakeSteerAsync(matchId: string, dir: SnakeDir, boost = false): Promise<ServerMessage> {
+    return this.request(
+      "snake",
+      () => this.snakeSteer(matchId, dir, boost),
+      8000,
+      (msg) => {
+        if (msg.type !== "snake" || msg.match.matchId !== matchId) return false;
+        const me = msg.match.players.find((player) => player.id === this.identity.id);
+        return me?.pendingDir === dir && me.boost === (me.alive && boost);
+      },
+    );
+  }
+
+  snakeLeaveAsync(): Promise<ServerMessage> {
+    return this.request(
+      "snake",
+      () => this.snakeLeave(),
+      8000,
+      (msg) => {
+        if (msg.type !== "snake") return false;
+        const me = msg.match.players.find((player) => player.id === this.identity.id);
+        return !me || !me.connected;
+      },
+    );
   }
 
   async moveAsync(matchId: string, uci: string): Promise<ServerMessage> {

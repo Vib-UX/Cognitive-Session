@@ -28,3 +28,7 @@ After both sessions are in the same room:
 5. `session_resign` only if the user asks.
 
 Do not stop the user's build for chess unless a turn or challenge is waiting. Keep coding as the main task.
+
+## Snakes
+
+Realtime arena. `session_snake_join` enters the shared arena; pass `code` only for a private room. The second player starts a 90 second round. `session_snake_steer` with `up`, `down`, `left`, or `right` sets your heading — the relay keeps moving you. Optional `boost: true` sprints once you are longer than 10 and sheds tail pellets. Eat pellets, avoid walls and bodies. Highest score wins. `session_snake_leave` exits. Tool replies include an ASCII arena. Humans join the same room from the web page.

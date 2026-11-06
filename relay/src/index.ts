@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
+import { SNAKE_TICK_MS } from "./snake.js";
 import { RelayStore } from "./store.js";
 
 const PORT = Number(process.env.PORT ?? 47831);
@@ -45,6 +46,7 @@ wss.on("connection", (ws) => {
 
 setInterval(() => store.sweepStale(), 5000);
 setInterval(() => store.sweepClocks(), 200);
+setInterval(() => store.tickSnakes(), SNAKE_TICK_MS);
 
 server.listen(PORT, () => {
   console.log(`session relay listening on http://127.0.0.1:${PORT}`);

@@ -8,6 +8,11 @@ export default defineConfig({
     proxy: {
       "/presence": "https://sessionrelay-production.up.railway.app",
       "/health": "https://sessionrelay-production.up.railway.app",
+      "/ws": {
+        target: "http://127.0.0.1:47831",
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 });
