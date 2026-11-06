@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {CCIP, IRouterClient, IAny2EVMMessageReceiver} from "../interfaces/CCIP.sol";
+import {IERC20} from "../interfaces/IERC20.sol";
 
 /// @dev Local fork / unit-test router that immediately delivers to the receiver.
 contract MockRouter is IRouterClient {
@@ -26,6 +27,14 @@ contract MockRouter is IRouterClient {
         lastMessageId = messageId;
 
         address receiver = abi.decode(message.receiver, (address));
+        for (uint256 i = 0; i < message.tokenAmounts.length; i++) {
+            CCIP.EVMTokenAmount memory token = message.tokenAmounts[i];
+            if (token.amount == 0) continue;
+            require(IERC20(token.token).transferFrom(msg.sender, receiver, token.amount), "token");
+        }
+        // Token-only CCIP 2.0 transfers deliver to an EOA and do not call back.
+        if (message.data.length == 0) return messageId;
+
         uint256 forward = msg.value > fee ? msg.value - fee : 0;
 
         IAny2EVMMessageReceiver.Any2EVMMessage memory incoming = IAny2EVMMessageReceiver.Any2EVMMessage({

@@ -5,6 +5,8 @@ export interface SessionIdentity {
   displayName: string;
   host: "cursor" | "claude";
   ensName?: string;
+  walletAddress?: `0x${string}`;
+  chainId?: number;
 }
 
 export interface PeerInfo {
@@ -67,7 +69,8 @@ export type ServerMessage =
   | { type: "challenge_resolved"; challengeId: string; accepted: boolean; match?: ChessState }
   | { type: "match"; match: ChessState }
   | { type: "queue"; seeking: boolean; waiting: number }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; scope?: "reward" }
+  | { type: "reward"; txHash: string; chainId: number; amount: string; chainName: string }
   | {
       type: "poll_state";
       peers: PeerInfo[];

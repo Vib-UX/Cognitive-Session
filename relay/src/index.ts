@@ -12,7 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "session-relay" });
+  res.json({ ok: true, service: "session-relay", puzzles: true });
 });
 
 app.get("/presence", (_req, res) => {

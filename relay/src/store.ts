@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type WebSocket from "ws";
 import { syncEntity } from "./arkiv-sync.js";
+import { payReward } from "./treasury.js";
 import { applyMove, applyResign, checkTimeout, createMatch } from "./chess.js";
 import type {
   ChallengeInfo,
@@ -111,12 +112,34 @@ export class RelayStore {
         case "set_match_meta":
           this.onMatchMeta(conn, msg);
           break;
+        case "claim_reward":
+          void this.onClaim(conn, msg.amount);
+          break;
         default:
           this.send(ws, { type: "error", message: "Unknown message type" });
       }
     } catch (err) {
       this.send(ws, {
         type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async onClaim(conn: Conn, amountRaw: string): Promise<void> {
+    try {
+      const wallet = conn.identity?.walletAddress;
+      const chainId = conn.identity?.chainId;
+      if (!wallet || !chainId) {
+        throw new Error("Set a wallet and a mainnet chain in the lobby first");
+      }
+      if (!/^\d+$/.test(amountRaw)) throw new Error("Reward amount is not a USDC value");
+      const paid = await payReward({ wallet, chainId, amount: BigInt(amountRaw) });
+      this.send(conn.ws, { type: "reward", ...paid });
+    } catch (err) {
+      this.send(conn.ws, {
+        type: "error",
+        scope: "reward",
         message: err instanceof Error ? err.message : String(err),
       });
     }

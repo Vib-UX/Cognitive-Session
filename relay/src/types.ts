@@ -7,6 +7,7 @@ export interface SessionIdentity {
   host: HostKind;
   ensName?: string;
   walletAddress?: `0x${string}`;
+  chainId?: number;
 }
 
 export interface PeerInfo {
@@ -83,7 +84,8 @@ export type ClientMessage =
   | { type: "resign"; matchId: string }
   | { type: "next" }
   | { type: "poll" }
-  | { type: "set_match_meta"; matchId: string; lockTx?: string; ccipMessageId?: string; payoutTx?: string; status?: ChessState["status"] };
+  | { type: "set_match_meta"; matchId: string; lockTx?: string; ccipMessageId?: string; payoutTx?: string; status?: ChessState["status"] }
+  | { type: "claim_reward"; amount: string };
 
 export type ServerMessage =
   | { type: "welcome"; identity: SessionIdentity; peers: PeerInfo[]; room: RoomInfo | null }
@@ -94,7 +96,8 @@ export type ServerMessage =
   | { type: "challenge_resolved"; challengeId: string; accepted: boolean; match?: ChessState }
   | { type: "match"; match: ChessState }
   | { type: "queue"; seeking: boolean; waiting: number }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; scope?: "reward" }
+  | { type: "reward"; txHash: string; chainId: number; amount: string; chainName: string }
   | {
       type: "poll_state";
       peers: PeerInfo[];

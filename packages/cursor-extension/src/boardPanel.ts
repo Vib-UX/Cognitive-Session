@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import type { Credits } from "./credits";
+import { MATE_PUZZLES } from "./mates";
 import type { GameId, PrefsStore, SessionPrefs } from "./prefs";
 import type { RelayBridge } from "./relayBridge";
 import type { ChessState, UiState } from "./types";
@@ -14,6 +16,7 @@ export class BoardPanel {
     panel: vscode.WebviewPanel,
     private readonly bridge: RelayBridge,
     private readonly prefs: PrefsStore,
+    private readonly credits: Credits,
   ) {
     this.panel = panel;
     this.panel.webview.options = { enableScripts: true };
@@ -44,9 +47,17 @@ export class BoardPanel {
           this.postPrefs(this.prefs.get());
           this.postState(this.bridge.state);
           if (this.pendingGame) {
-            this.panel.webview.postMessage({ type: "play", game: this.pendingGame });
+            this.panel.webview.postMessage({ type: "deal", game: this.pendingGame });
           }
           break;
+        case "solved": {
+          const awarded = this.credits.award(String(msg.kind ?? ""), String(msg.id ?? ""));
+          this.panel.webview.postMessage({ type: "credit", note: awarded.note });
+          if (awarded.cents > 0) {
+            vscode.window.setStatusBarMessage(`Session: ${awarded.note}`, 5000);
+          }
+          break;
+        }
       }
     });
 
@@ -59,7 +70,7 @@ export class BoardPanel {
     });
   }
 
-  static show(bridge: RelayBridge, prefs: PrefsStore, game?: GameId) {
+  static show(bridge: RelayBridge, prefs: PrefsStore, credits: Credits, game?: GameId) {
     if (BoardPanel.current) {
       BoardPanel.current.panel.reveal(vscode.ViewColumn.Beside);
       if (game) BoardPanel.current.play(game);
@@ -74,7 +85,7 @@ export class BoardPanel {
         retainContextWhenHidden: true,
       },
     );
-    BoardPanel.current = new BoardPanel(panel, bridge, prefs);
+    BoardPanel.current = new BoardPanel(panel, bridge, prefs, credits);
     if (game) BoardPanel.current.play(game);
     return BoardPanel.current;
   }
@@ -82,6 +93,12 @@ export class BoardPanel {
   play(game: GameId) {
     this.pendingGame = game;
     this.panel.webview.postMessage({ type: "play", game });
+  }
+
+  /** Open this game from an agent prompt. Solo puzzles deal only if none is in progress. */
+  deal(game: GameId) {
+    this.pendingGame = game;
+    this.panel.webview.postMessage({ type: "deal", game });
   }
 
   private postPrefs(prefs: SessionPrefs) {
@@ -93,6 +110,7 @@ export class BoardPanel {
   }
 
   private html(): string {
+    const mateJson = JSON.stringify(MATE_PUZZLES);
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -178,6 +196,7 @@ export class BoardPanel {
     .sq.light { background: var(--light); }
     .sq.dark { background: var(--dark); }
     .sq.selected { outline: 3px solid #f6f669; outline-offset: -3px; }
+    .sq.hint { box-shadow: inset 0 0 0 5px rgba(246, 246, 105, 0.9); }
     .sq.legal::after {
       content: '';
       width: 14px; height: 14px; border-radius: 50%;
@@ -232,7 +251,26 @@ export class BoardPanel {
     .sudo input.bad { background: #f4c7c3; }
     .sudo input.edge-r { box-shadow: inset -2px 0 0 #262421; }
     .sudo input.edge-b { box-shadow: inset 0 -2px 0 #262421; }
-    .math-prompt { font-size: 42px; font-weight: 750; margin: 16px 0; }
+    .brainbar { display: flex; gap: 6px; margin-bottom: 8px; }
+    .bank { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .bank button, .cross button.num, .maze button {
+      min-width: 44px; height: 40px; margin: 0;
+      font-weight: 750;
+    }
+    .bank button.on, .maze button.on { outline: 2px solid #f6f669; outline-offset: -2px; }
+    .cross { display: grid; grid-template-columns: 48px 22px 48px 22px 48px 28px; gap: 4px 6px; align-items: center; width: max-content; }
+    .cross .op, .cross .eq { text-align: center; font-weight: 700; }
+    .cross button.num { width: 48px; background: #fff; color: #1a1a1a; }
+    .cross button.num.given { background: #eeeed2; }
+    .ken { display: grid; grid-template-columns: repeat(4, 58px); width: max-content; }
+    .ken button {
+      width: 58px; height: 58px; margin: 0; border-radius: 0;
+      background: #fff; color: #1a1a1a; font-size: 18px; position: relative;
+    }
+    .ken .clab { position: absolute; top: 2px; left: 3px; font-size: 9px; font-weight: 700; opacity: 0.75; }
+    .maze { display: grid; grid-template-columns: repeat(5, 48px); gap: 4px; width: max-content; }
+    .maze button.opcell { background: #eeeed2; color: #1a1a1a; }
+    .maze button.numcell { background: #fff; color: #1a1a1a; }
   </style>
 </head>
 <body>
@@ -288,18 +326,27 @@ export class BoardPanel {
       <div class="sub" id="sudoNote"></div>
     </div>
     <div id="mathsView" style="display:none">
-      <div class="playerbar"><span class="pname" id="mathScore">Score 0</span><span class="clock run" id="mathClock">2:00</span></div>
-      <div class="math-prompt" id="mathPrompt">—</div>
-      <input id="mathAnswer" placeholder="Answer" />
-      <div>
-        <button id="mathGo">Answer</button>
-        <button id="mathNew" class="secondary">New round</button>
+      <div class="brainbar" id="brainBar"></div>
+      <div class="sub" id="brainLead"></div>
+      <div id="brainBoard"></div>
+      <div id="brainBank" class="bank"></div>
+      <div style="margin-top:8px">
+        <button id="brainNew">New puzzle</button>
+        <button id="brainUndo" class="secondary">Undo</button>
       </div>
-      <div class="sub" id="mathNote"></div>
+      <div class="sub" id="brainNote"></div>
+    </div>
+    <div id="mateView" style="display:none">
+      <div class="board" id="mateBoard"></div>
+      <div class="actions" style="margin-top:8px">
+        <button id="mateNew">New puzzle</button>
+      </div>
+      <div class="sub" id="mateNote"></div>
     </div>
   </div>
   <script>
     const vscode = acquireVsCodeApi();
+    const MATES = ${mateJson};
     const SHAPES = {
       P: '<ellipse cx="50" cy="84" rx="24" ry="7"/><path d="M36 78 C34 66 40 58 44 52 C34 48 30 38 38 30 C44 24 56 24 62 30 C70 38 66 48 56 52 C60 58 66 66 64 78 Z"/><circle cx="50" cy="22" r="13"/>',
       R: '<path d="M20 18 h16 v10 h8 v-10 h12 v10 h8 v-10 h16 v16 H20 Z"/><path d="M28 34 h44 v10 H28 Z"/><path d="M32 44 h36 v28 H32 Z"/><ellipse cx="50" cy="80" rx="32" ry="8"/>',
@@ -345,6 +392,102 @@ export class BoardPanel {
 
     function sqName(r, c) {
       return 'abcdefgh'[c] + (8 - r);
+    }
+
+    let mate = null;
+    let matePick = null;
+    function newMate() {
+      beginPuzzle();
+      let idx = Math.floor(Math.random() * MATES.length);
+      if (mate && MATES.length > 1 && idx === mate.i) idx = (idx + 1) % MATES.length;
+      mate = { i: idx, fen: MATES[idx].fen, mates: MATES[idx].mates, legal: MATES[idx].legal };
+      matePick = null;
+      drawMate();
+    }
+    function mateMovesFrom(square) {
+      return (mate.legal || []).filter((move) => move.slice(0, 2) === square);
+    }
+    function mateChoice(stem) {
+      const options = (mate.legal || []).filter((move) => move === stem || move.indexOf(stem) === 0);
+      return options.find((move) => mate.mates.indexOf(move) !== -1) || options[0] || null;
+    }
+    function drawMate() {
+      const board = $('mateBoard');
+      const note = $('mateNote');
+      if (!mate) {
+        board.innerHTML = '';
+        return;
+      }
+      note.textContent = '';
+      $('subtitle').textContent = 'Mate in 1.';
+      const side = mate.fen.split(' ')[1] === 'b' ? 'b' : 'w';
+      const grid = fenToGrid(mate.fen);
+      const hints = {};
+      if (matePick) {
+        for (const move of mateMovesFrom(matePick)) hints[move.slice(2, 4)] = true;
+      }
+      const blackView = side === 'b';
+      const rows = blackView ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
+      const cols = blackView ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
+      board.innerHTML = '';
+      for (const r of rows) {
+        for (const c of cols) {
+          const sq = document.createElement('div');
+          const light = (r + c) % 2 === 0;
+          sq.className = 'sq ' + (light ? 'light' : 'dark');
+          const name = sqName(r, c);
+          const piece = grid[r][c];
+          if (piece) sq.innerHTML = pieceMarkup(piece);
+          const leftEdge = blackView ? c === 7 : c === 0;
+          const bottomEdge = blackView ? r === 0 : r === 7;
+          if (leftEdge) {
+            const rank = document.createElement('span');
+            rank.className = 'coord rank ' + (light ? 'on-light' : 'on-dark');
+            rank.textContent = String(8 - r);
+            sq.append(rank);
+          }
+          if (bottomEdge) {
+            const file = document.createElement('span');
+            file.className = 'coord file ' + (light ? 'on-light' : 'on-dark');
+            file.textContent = 'abcdefgh'[c];
+            sq.append(file);
+          }
+          if (matePick === name) sq.classList.add('selected');
+          if (hints[name]) sq.classList.add('hint');
+          sq.onclick = () => onMateSquare(name, piece, side);
+          board.append(sq);
+        }
+      }
+    }
+    function onMateSquare(name, piece, side) {
+      if (!mate) return;
+      const own = piece && ((side === 'w') === (piece === piece.toUpperCase()));
+      if (!matePick) {
+        if (!own || !mateMovesFrom(name).length) return;
+        matePick = name;
+        drawMate();
+        return;
+      }
+      if (name === matePick) {
+        matePick = null;
+        drawMate();
+        return;
+      }
+      if (own && mateMovesFrom(name).length) {
+        matePick = name;
+        drawMate();
+        return;
+      }
+      const chosen = mateChoice(matePick + name);
+      if (!chosen) return;
+      const mating = mate.mates.indexOf(chosen) !== -1;
+      matePick = null;
+      if (mating) {
+        nextSolved('mate');
+        return;
+      }
+      drawMate();
+      $('mateNote').textContent = 'Not mate.';
     }
 
     function render() {
@@ -496,7 +639,7 @@ export class BoardPanel {
       $('botClock').className = 'clock' + (match.status === 'active' && match.turn === botColor ? ' run' : '') + (botMs < 20000 ? ' low' : '');
     }
 
-    setInterval(() => { paintClocks(); tickMath(); }, 100);
+    setInterval(paintClocks, 100);
 
     function rand(n) { return Math.floor(Math.random() * n); }
     function shuffle(list) {
@@ -548,7 +691,26 @@ export class BoardPanel {
       }
       return count;
     }
+    let puzzleSerial = 0;
+    let reportedSerial = 0;
+    function beginPuzzle() {
+      puzzleSerial += 1;
+      reportedSerial = 0;
+    }
+    function reportSolve(kind) {
+      if (reportedSerial === puzzleSerial) return false;
+      reportedSerial = puzzleSerial;
+      vscode.postMessage({ type: 'solved', kind: kind, id: kind + '-' + puzzleSerial });
+      return true;
+    }
+    function nextSolved(kind) {
+      if (!reportSolve(kind)) return;
+      if (kind === 'sudoku') newSudoku();
+      else if (kind === 'mate') newMate();
+      else newBrain();
+    }
     function newSudoku() {
+      beginPuzzle();
       const solved = Array.from({ length: 9 }, () => Array(9).fill(0));
       fillGrid(solved);
       const puzzle = solved.map((row) => row.slice());
@@ -611,58 +773,453 @@ export class BoardPanel {
         }
         input.classList.toggle('bad', bad);
       });
-      $('sudoNote').textContent = solved && filled ? 'Solved.' : '';
+      if (solved && filled) nextSolved('sudoku');
+      else $('sudoNote').textContent = '';
     }
-    function makeQuestion() {
-      const kind = rand(4);
-      let a, b, op, ans;
-      if (kind === 0) { a = 12 + rand(80); b = 12 + rand(80); op = '+'; ans = a + b; }
-      else if (kind === 1) { a = 30 + rand(60); b = 10 + rand(a - 15); op = '−'; ans = a - b; }
-      else if (kind === 2) { a = 2 + rand(11); b = 2 + rand(11); op = '×'; ans = a * b; }
-      else { b = 2 + rand(11); ans = 2 + rand(11); a = b * ans; op = '÷'; }
-      return { text: a + ' ' + op + ' ' + b, ans };
+    let brainKind = 'cross';
+    const BRAIN_OPS = ['+', '+', '−', '×', '×', '÷'];
+    function applyOp(a, op, b) {
+      if (op === '+') return a + b;
+      if (op === '−') return a - b;
+      if (op === '×') return a * b;
+      if (op === '÷' && b && a % b === 0) return a / b;
+      return null;
     }
-    function newMathRound() {
-      math = { end: Date.now() + 120000, score: 0, streak: 0, q: makeQuestion(), over: false };
-      $('mathAnswer').value = '';
-      $('mathNote').textContent = '';
-      $('mathAnswer').disabled = false;
-      drawMath();
+    function evalExpr(a, op1, b, op2, c) {
+      const high = (op) => op === '×' || op === '÷';
+      let mid;
+      if (!high(op1) && high(op2)) {
+        mid = applyOp(b, op2, c);
+        if (mid == null) return null;
+        return applyOp(a, op1, mid);
+      }
+      mid = applyOp(a, op1, b);
+      if (mid == null) return null;
+      return applyOp(mid, op2, c);
     }
-    function drawMath() {
+    function newCross() {
+      for (let attempt = 0; attempt < 120; attempt++) {
+        const nums = [0, 1, 2].map(() => [1 + rand(12), 1 + rand(12), 1 + rand(12)]);
+        const rowOps = [0, 1, 2].map(() => [BRAIN_OPS[rand(BRAIN_OPS.length)], BRAIN_OPS[rand(BRAIN_OPS.length)]]);
+        const colOps = [0, 1, 2].map(() => [BRAIN_OPS[rand(BRAIN_OPS.length)], BRAIN_OPS[rand(BRAIN_OPS.length)]]);
+        const rowTargets = [];
+        const colTargets = [];
+        let ok = true;
+        for (let r = 0; r < 3 && ok; r++) {
+          const t = evalExpr(nums[r][0], rowOps[r][0], nums[r][1], rowOps[r][1], nums[r][2]);
+          if (t == null || t < 0 || t > 250) ok = false;
+          else rowTargets.push(t);
+        }
+        for (let c = 0; c < 3 && ok; c++) {
+          const t = evalExpr(nums[0][c], colOps[c][0], nums[1][c], colOps[c][1], nums[2][c]);
+          if (t == null || t < 0 || t > 250) ok = false;
+          else colTargets.push(t);
+        }
+        if (!ok) continue;
+        const hidden = shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8]).slice(0, 5);
+        const given = [0, 1, 2].map(() => [true, true, true]);
+        const play = nums.map((row) => row.slice());
+        const bank = [];
+        for (const idx of hidden) {
+          const r = Math.floor(idx / 3), c = idx % 3;
+          given[r][c] = false;
+          bank.push(nums[r][c]);
+          play[r][c] = null;
+        }
+        math = { kind: 'cross', nums, given, play, bank, rowOps, colOps, rowTargets, colTargets, pick: null };
+        return;
+      }
+      math = {
+        kind: 'cross',
+        nums: [[2, 3, 4], [1, 5, 2], [3, 1, 6]],
+        given: [[true, false, true], [false, true, false], [true, false, true]],
+        play: [[2, null, 4], [null, 5, null], [3, null, 6]],
+        bank: [3, 1, 2, 1],
+        rowOps: [['+', '+'], ['+', '+'], ['+', '+']],
+        colOps: [['+', '+'], ['+', '+'], ['+', '+']],
+        rowTargets: [9, 8, 10],
+        colTargets: [6, 9, 12],
+        pick: null,
+      };
+    }
+    function newKenken() {
+      const n = 4;
+      const grid = Array.from({ length: n }, () => Array(n).fill(0));
+      function bt(i) {
+        if (i === n * n) return true;
+        const r = Math.floor(i / n), c = i % n;
+        for (const v of shuffle([1, 2, 3, 4])) {
+          let used = false;
+          for (let k = 0; k < n; k++) if (grid[r][k] === v || grid[k][c] === v) used = true;
+          if (used) continue;
+          grid[r][c] = v;
+          if (bt(i + 1)) return true;
+          grid[r][c] = 0;
+        }
+        return false;
+      }
+      bt(0);
+      const seen = Array.from({ length: n }, () => Array(n).fill(false));
+      const order = shuffle(Array.from({ length: n * n }, (_, i) => i));
+      const cages = [];
+      const dirs = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+      for (const idx of order) {
+        const r = Math.floor(idx / n), c = idx % n;
+        if (seen[r][c]) continue;
+        const group = [[r, c]];
+        seen[r][c] = true;
+        const want = 1 + rand(3);
+        while (group.length < want) {
+          const frontier = [];
+          for (const cell of group) {
+            for (const d of dirs) {
+              const nr = cell[0] + d[0], nc = cell[1] + d[1];
+              if (nr < 0 || nc < 0 || nr >= n || nc >= n || seen[nr][nc]) continue;
+              frontier.push([nr, nc]);
+            }
+          }
+          if (!frontier.length) break;
+          const next = frontier[rand(frontier.length)];
+          seen[next[0]][next[1]] = true;
+          group.push(next);
+        }
+        const vals = group.map(([rr, cc]) => grid[rr][cc]);
+        let op = '';
+        let target = vals[0];
+        if (vals.length === 2) {
+          const choices = ['+', '×'];
+          if (vals[0] !== vals[1]) choices.push('−');
+          if (vals[0] % vals[1] === 0 || vals[1] % vals[0] === 0) choices.push('÷');
+          op = choices[rand(choices.length)];
+          if (op === '+') target = vals[0] + vals[1];
+          if (op === '×') target = vals[0] * vals[1];
+          if (op === '−') target = Math.abs(vals[0] - vals[1]);
+          if (op === '÷') target = Math.max(vals[0], vals[1]) / Math.min(vals[0], vals[1]);
+        } else if (vals.length > 2) {
+          op = rand(2) ? '+' : '×';
+          target = op === '+' ? vals.reduce((a, b) => a + b, 0) : vals.reduce((a, b) => a * b, 1);
+        }
+        cages.push({ cells: group, op, target });
+      }
+      math = {
+        kind: 'kenken',
+        cages,
+        play: Array.from({ length: n }, () => Array(n).fill(0)),
+      };
+    }
+    function newMaze() {
+      const n = 5;
+      const dirs = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+      let found = null;
+      function walk() {
+        const seen = Array.from({ length: n }, () => Array(n).fill(false));
+        const path = [[0, 0]];
+        seen[0][0] = true;
+        function dfs() {
+          const cur = path[path.length - 1];
+          if (cur[0] === n - 1 && cur[1] === n - 1) return path.length >= 7;
+          const opts = shuffle(dirs.map(([dr, dc]) => [cur[0] + dr, cur[1] + dc]))
+            .filter(([r, c]) => r >= 0 && c >= 0 && r < n && c < n && !seen[r][c]);
+          for (const next of opts) {
+            seen[next[0]][next[1]] = true;
+            path.push(next);
+            if (dfs()) return true;
+            path.pop();
+            seen[next[0]][next[1]] = false;
+          }
+          return false;
+        }
+        if (dfs()) found = path.map((cell) => cell.slice());
+      }
+      for (let i = 0; i < 30 && !found; i++) walk();
+      if (!found) found = [[0, 0], [0, 1], [0, 2], [1, 2], [2, 2], [3, 2], [4, 2], [4, 3], [4, 4]];
+      const cells = Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => (
+        (r + c) % 2 === 0 ? { k: 'n', v: 1 + rand(9) } : { k: 'op', v: BRAIN_OPS[rand(4)] }
+      )));
+      let total = 2 + rand(7);
+      cells[found[0][0]][found[0][1]] = { k: 'n', v: total };
+      for (let i = 1; i < found.length; i++) {
+        const cell = found[i];
+        if (i % 2 === 1) {
+          const opts = ['+', '×'];
+          if (total > 4) opts.push('−');
+          if ([2, 3, 4, 5].some((d) => total % d === 0)) opts.push('÷');
+          cells[cell[0]][cell[1]] = { k: 'op', v: opts[rand(opts.length)] };
+        } else {
+          const op = cells[found[i - 1][0]][found[i - 1][1]].v;
+          let num = 1 + rand(8);
+          if (op === '−') num = 1 + rand(Math.max(1, Math.min(8, total - 1)));
+          if (op === '×') num = 2 + rand(3);
+          if (op === '÷') {
+            const divs = [2, 3, 4, 5, 6, 7, 8, 9].filter((d) => total % d === 0);
+            num = divs.length ? divs[rand(divs.length)] : 1;
+            if (num === 1) cells[found[i - 1][0]][found[i - 1][1]].v = '+';
+          }
+          let next = applyOp(total, cells[found[i - 1][0]][found[i - 1][1]].v, num);
+          if (next == null) {
+            cells[found[i - 1][0]][found[i - 1][1]].v = '+';
+            next = total + num;
+          }
+          total = next;
+          cells[cell[0]][cell[1]] = { k: 'n', v: num };
+        }
+      }
+      math = { kind: 'maze', cells, path: [[0, 0]], target: total };
+    }
+    function newBrain() {
+      beginPuzzle();
+      if (brainKind === 'kenken') newKenken();
+      else if (brainKind === 'maze') newMaze();
+      else newCross();
+      drawBrain();
+    }
+    function brainLead() {
+      if (!math) return '';
+      if (math.kind === 'cross') return 'Cross Math. Drop the bank into the blanks. × and ÷ before + and −. Rows and columns must both hit their totals.';
+      if (math.kind === 'kenken') return 'KenKen. Use 1–4 once in every row and column. Each outlined cage has to make its target.';
+      return 'Math maze. Trace a path from S to E. Numbers and operators alternate, worked left to right, and must land on ' + math.target + '.';
+    }
+    function drawBrainBar() {
+      const bar = $('brainBar');
+      bar.innerHTML = '';
+      const modes = [['cross', 'Cross Math'], ['kenken', 'KenKen'], ['maze', 'Maze']];
+      for (const pair of modes) {
+        const b = document.createElement('button');
+        b.textContent = pair[1];
+        if (pair[0] !== brainKind) b.className = 'secondary';
+        b.onclick = () => { brainKind = pair[0]; newBrain(); };
+        bar.append(b);
+      }
+    }
+    function drawBrain() {
+      drawBrainBar();
+      $('brainLead').textContent = brainLead();
+      $('brainNote').textContent = '';
+      $('brainBank').innerHTML = '';
+      const board = $('brainBoard');
+      board.innerHTML = '';
       if (!math) return;
-      $('mathPrompt').textContent = math.over ? 'Time' : math.q.text;
-      $('mathScore').textContent = 'Score ' + math.score + '  ·  streak ' + math.streak;
+      if (math.kind === 'cross') drawCross(board);
+      else if (math.kind === 'kenken') drawKenken(board);
+      else drawMaze(board);
     }
-    function tickMath() {
-      if (!math || activeGame !== 'maths') return;
-      const left = Math.max(0, math.end - Date.now());
-      $('mathClock').textContent = fmtClock(left);
-      $('mathClock').className = 'clock run' + (left < 20000 ? ' low' : '');
-      if (left === 0 && !math.over) {
-        math.over = true;
-        $('mathAnswer').disabled = true;
-        $('mathNote').textContent = 'Round over. Score ' + math.score + '.';
-        drawMath();
+    function drawCross(board) {
+      const wrap = document.createElement('div');
+      wrap.className = 'cross';
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          const btn = document.createElement('button');
+          btn.className = 'num' + (math.given[r][c] ? ' given' : '');
+          btn.textContent = math.play[r][c] == null ? '' : String(math.play[r][c]);
+          const rr = r, cc = c;
+          btn.onclick = () => placeCross(rr, cc);
+          wrap.append(btn);
+          if (c < 2) {
+            const op = document.createElement('div');
+            op.className = 'op';
+            op.textContent = math.rowOps[r][c];
+            wrap.append(op);
+          }
+        }
+        const eq = document.createElement('div');
+        eq.className = 'eq';
+        eq.textContent = '= ' + math.rowTargets[r];
+        wrap.append(eq);
+        if (r < 2) {
+          for (let c = 0; c < 3; c++) {
+            const op = document.createElement('div');
+            op.className = 'op';
+            op.textContent = math.colOps[c][r];
+            wrap.append(op);
+            if (c < 2) wrap.append(document.createElement('div'));
+          }
+          wrap.append(document.createElement('div'));
+        }
       }
+      for (let c = 0; c < 3; c++) {
+        const eq = document.createElement('div');
+        eq.className = 'eq';
+        eq.textContent = '= ' + math.colTargets[c];
+        wrap.append(eq);
+        if (c < 2) wrap.append(document.createElement('div'));
+      }
+      board.append(wrap);
+      math.bank.forEach((n, i) => {
+        const chip = document.createElement('button');
+        chip.textContent = String(n);
+        if (math.pick === i) chip.className = 'on';
+        chip.onclick = () => { math.pick = math.pick === i ? null : i; drawBrain(); };
+        $('brainBank').append(chip);
+      });
+      if (crossFull() && crossOk()) nextSolved('cross');
     }
-    function submitMath() {
-      if (!math || math.over) return;
-      const raw = $('mathAnswer').value.trim();
-      if (!raw) return;
-      const value = Number(raw);
-      if (value === math.q.ans) {
-        math.score += 1;
-        math.streak += 1;
-        $('mathNote').textContent = 'Correct';
-      } else {
-        math.streak = 0;
-        $('mathNote').textContent = 'It was ' + math.q.ans;
+    function placeCross(r, c) {
+      if (math.given[r][c]) return;
+      if (math.play[r][c] != null) {
+        math.bank.push(math.play[r][c]);
+        math.play[r][c] = null;
+        math.pick = null;
+        drawBrain();
+        return;
       }
-      $('mathAnswer').value = '';
-      math.q = makeQuestion();
-      drawMath();
-      $('mathAnswer').focus();
+      if (math.pick == null) return;
+      math.play[r][c] = math.bank.splice(math.pick, 1)[0];
+      math.pick = null;
+      drawBrain();
+    }
+    function crossFull() {
+      return math.play.every((row) => row.every((v) => v != null));
+    }
+    function crossOk() {
+      for (let r = 0; r < 3; r++) {
+        if (evalExpr(math.play[r][0], math.rowOps[r][0], math.play[r][1], math.rowOps[r][1], math.play[r][2]) !== math.rowTargets[r]) return false;
+      }
+      for (let c = 0; c < 3; c++) {
+        if (evalExpr(math.play[0][c], math.colOps[c][0], math.play[1][c], math.colOps[c][1], math.play[2][c]) !== math.colTargets[c]) return false;
+      }
+      return true;
+    }
+    function drawKenken(board) {
+      const wrap = document.createElement('div');
+      wrap.className = 'ken';
+      for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+          const btn = document.createElement('button');
+          const cage = math.cages.find((item) => item.cells.some((cell) => cell[0] === r && cell[1] === c));
+          const first = cage.cells.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1])[0];
+          btn.textContent = math.play[r][c] ? String(math.play[r][c]) : '';
+          if (first[0] === r && first[1] === c) {
+            const lab = document.createElement('span');
+            lab.className = 'clab';
+            lab.textContent = cage.target + cage.op;
+            btn.append(lab);
+          }
+          const id = math.cages.indexOf(cage);
+          const edge = (nr, nc) => {
+            if (nr < 0 || nc < 0 || nr > 3 || nc > 3) return '3px solid #262421';
+            const other = math.cages.findIndex((item) => item.cells.some((cell) => cell[0] === nr && cell[1] === nc));
+            return other === id ? '1px solid #ddd' : '3px solid #262421';
+          };
+          btn.style.borderTop = edge(r - 1, c);
+          btn.style.borderRight = edge(r, c + 1);
+          btn.style.borderBottom = edge(r + 1, c);
+          btn.style.borderLeft = edge(r, c - 1);
+          const rr = r, cc = c;
+          btn.onclick = () => {
+            math.play[rr][cc] = (math.play[rr][cc] + 1) % 5;
+            drawBrain();
+          };
+          wrap.append(btn);
+        }
+      }
+      board.append(wrap);
+      if (kenkenOk()) nextSolved('kenken');
+    }
+    function kenkenOk() {
+      const g = math.play;
+      for (let r = 0; r < 4; r++) {
+        const row = new Set();
+        const col = new Set();
+        for (let c = 0; c < 4; c++) {
+          if (!g[r][c] || !g[c][r]) return false;
+          row.add(g[r][c]);
+          col.add(g[c][r]);
+        }
+        if (row.size !== 4 || col.size !== 4) return false;
+      }
+      return math.cages.every((cage) => {
+        const vals = cage.cells.map((cell) => g[cell[0]][cell[1]]);
+        if (!cage.op) return vals[0] === cage.target;
+        if (cage.op === '+') return vals.reduce((a, b) => a + b, 0) === cage.target;
+        if (cage.op === '×') return vals.reduce((a, b) => a * b, 1) === cage.target;
+        if (cage.op === '−') return Math.abs(vals[0] - vals[1]) === cage.target;
+        const a = vals[0], b = vals[1];
+        if (!b || !a) return false;
+        return (a % b === 0 ? a / b : b / a) === cage.target;
+      });
+    }
+    function mazeValue() {
+      const path = math.path;
+      const start = math.cells[path[0][0]][path[0][1]];
+      if (start.k !== 'n') return null;
+      let total = start.v;
+      for (let i = 1; i < path.length; i += 2) {
+        if (!path[i + 1]) return null;
+        const op = math.cells[path[i][0]][path[i][1]];
+        const num = math.cells[path[i + 1][0]][path[i + 1][1]];
+        if (op.k !== 'op' || num.k !== 'n') return null;
+        total = applyOp(total, op.v, num.v);
+        if (total == null) return null;
+      }
+      return path.length % 2 === 1 ? total : null;
+    }
+    function drawMaze(board) {
+      const wrap = document.createElement('div');
+      wrap.className = 'maze';
+      const onPath = new Set(math.path.map((cell) => cell[0] + ',' + cell[1]));
+      for (let r = 0; r < 5; r++) {
+        for (let c = 0; c < 5; c++) {
+          const cell = math.cells[r][c];
+          const btn = document.createElement('button');
+          btn.className = cell.k === 'op' ? 'opcell' : 'numcell';
+          if (onPath.has(r + ',' + c)) btn.classList.add('on');
+          let label = String(cell.v);
+          if (r === 0 && c === 0) label = 'S ' + label;
+          if (r === 4 && c === 4) label = label + ' E';
+          btn.textContent = label;
+          const rr = r, cc = c;
+          btn.onclick = () => stepMaze(rr, cc);
+          wrap.append(btn);
+        }
+      }
+      board.append(wrap);
+      const now = mazeValue();
+      const mazeSolved = now === math.target && math.path[math.path.length - 1][0] === 4 && math.path[math.path.length - 1][1] === 4;
+      if (mazeSolved) nextSolved('maze');
+      else $('brainNote').textContent = now == null
+        ? 'Running total updates after each number.'
+        : 'Now ' + now + '  ·  target ' + math.target;
+    }
+    function stepMaze(r, c) {
+      const path = math.path;
+      const last = path[path.length - 1];
+      if (last[0] === r && last[1] === c) {
+        if (path.length > 1) path.pop();
+        drawBrain();
+        return;
+      }
+      if (Math.abs(last[0] - r) + Math.abs(last[1] - c) !== 1) return;
+      if (path.some((cell) => cell[0] === r && cell[1] === c)) return;
+      path.push([r, c]);
+      drawBrain();
+    }
+    function undoBrain() {
+      if (!math) return;
+      if (math.kind === 'maze') {
+        if (math.path.length > 1) math.path.pop();
+        drawBrain();
+        return;
+      }
+      if (math.kind === 'cross') {
+        for (let r = 2; r >= 0; r--) for (let c = 2; c >= 0; c--) {
+          if (!math.given[r][c] && math.play[r][c] != null) {
+            math.bank.push(math.play[r][c]);
+            math.play[r][c] = null;
+            math.pick = null;
+            drawBrain();
+            return;
+          }
+        }
+      }
+      if (math.kind === 'kenken') {
+        for (let r = 3; r >= 0; r--) for (let c = 3; c >= 0; c--) {
+          if (math.play[r][c]) {
+            math.play[r][c] = 0;
+            drawBrain();
+            return;
+          }
+        }
+      }
     }
     function showGame(game) {
       if (prefs.games.indexOf(game) === -1) game = prefs.games[0] || 'chess';
@@ -671,9 +1228,10 @@ export class BoardPanel {
       $('puzzleWrap').style.display = game === 'chess' ? 'none' : '';
       $('sudokuView').style.display = game === 'sudoku' ? '' : 'none';
       $('mathsView').style.display = game === 'maths' ? '' : 'none';
+      $('mateView').style.display = game === 'mate' ? '' : 'none';
       const bar = $('gameBar');
       bar.innerHTML = '';
-      const labels = { chess: 'Chess', sudoku: 'Sudoku', maths: 'Maths' };
+      const labels = { chess: 'Chess', sudoku: 'Sudoku', maths: 'Maths', mate: 'Mate in 1' };
       for (const id of prefs.games) {
         const b = document.createElement('button');
         b.textContent = labels[id] || id;
@@ -682,10 +1240,15 @@ export class BoardPanel {
         bar.append(b);
       }
       if (game === 'sudoku' && !sudo) newSudoku();
-      if (game === 'maths' && !math) newMathRound();
+      if (game === 'maths' && !math) newBrain();
+      if (game === 'mate' && !mate) newMate();
       if (game === 'chess') render();
       else if (game === 'sudoku') $('subtitle').textContent = 'Sudoku. Each row, column, and box uses 1–9 once.';
-      else $('subtitle').textContent = 'Maths. Two minutes. Answer as many as you can.';
+      else if (game === 'mate') {
+        $('subtitle').textContent = 'Mate in 1.';
+        if (mate) drawMate();
+      }
+      else $('subtitle').textContent = 'Maths. Cross Math, KenKen, or a number maze.';
     }
     const $ = (id) => document.getElementById(id);
 
@@ -700,11 +1263,9 @@ export class BoardPanel {
     $('next').onclick = () => vscode.postMessage({ type: 'next' });
     $('refresh').onclick = () => vscode.postMessage({ type: 'refresh' });
     $('sudoNew').onclick = () => newSudoku();
-    $('mathGo').onclick = () => submitMath();
-    $('mathNew').onclick = () => newMathRound();
-    $('mathAnswer').addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') submitMath();
-    });
+    $('brainNew').onclick = () => newBrain();
+    $('brainUndo').onclick = () => undoBrain();
+    $('mateNew').onclick = () => newMate();
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
@@ -715,6 +1276,14 @@ export class BoardPanel {
       }
       if (msg.type === 'play') {
         showGame(msg.game);
+        return;
+      }
+      if (msg.type === 'credit') return;
+      if (msg.type === 'deal') {
+        showGame(msg.game);
+        if (msg.game === 'sudoku' && (!sudo || $('sudoNote').textContent === 'Solved.')) newSudoku();
+        if (msg.game === 'maths' && (!math || $('brainNote').textContent.indexOf('Solved') !== -1)) newBrain();
+        if (msg.game === 'mate' && !mate) newMate();
         return;
       }
       if (msg.type !== 'state') return;

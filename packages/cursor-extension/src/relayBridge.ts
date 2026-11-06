@@ -242,9 +242,38 @@ export class RelayBridge {
         break;
       case "error":
         this.error = msg.message;
+        if (this.pendingReward && (msg.scope === "reward" || msg.message === "Unknown message type")) {
+          const pending = this.pendingReward;
+          this.pendingReward = null;
+          pending.onError(msg.message);
+        }
+        break;
+      case "reward":
+        if (this.pendingReward) {
+          const pending = this.pendingReward;
+          this.pendingReward = null;
+          pending.onReward(msg.txHash, msg.chainName);
+        }
         break;
     }
     this.emit();
+  }
+
+  private pendingReward: {
+    onReward: (txHash: string, chainName: string) => void;
+    onError: (message: string) => void;
+  } | null = null;
+
+  claimReward(
+    amount: string,
+    hooks: { onReward: (txHash: string, chainName: string) => void; onError: (message: string) => void },
+  ) {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      hooks.onError("Relay is disconnected");
+      return;
+    }
+    this.pendingReward = hooks;
+    this.send({ type: "claim_reward", amount });
   }
 
   createRoom() {
@@ -287,5 +316,15 @@ export class RelayBridge {
 
   poll() {
     this.send({ type: "poll" });
+  }
+
+  setPlayer(wallet: `0x${string}`, chainId: number) {
+    this.me.walletAddress = wallet;
+    this.me.chainId = chainId;
+    const path = join(homedir(), ".session", "cursor-extension", `identity-${this.me.id.slice(5)}.json`);
+    mkdirSync(join(homedir(), ".session", "cursor-extension"), { recursive: true });
+    writeFileSync(path, JSON.stringify(this.me, null, 2));
+    this.send({ type: "hello", identity: this.me });
+    this.emit();
   }
 }

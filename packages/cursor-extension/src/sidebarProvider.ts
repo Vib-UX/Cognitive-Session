@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
+import type { Credits } from "./credits";
 import type { GameId, PrefsStore } from "./prefs";
-import { GAME_IDS } from "./prefs";
+import { EVM_CHAINS, GAME_IDS, isEvmAddress } from "./prefs";
 import type { RelayBridge } from "./relayBridge";
 import type { UiState } from "./types";
 
@@ -8,11 +9,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "session.sidebar";
   private view?: vscode.WebviewView;
   private unsub?: () => void;
+  private unsubCredits?: () => void;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly bridge: RelayBridge,
     private readonly prefs: PrefsStore,
+    private readonly credits: Credits,
     private readonly openBoard: (game?: GameId) => void,
   ) {}
 
@@ -30,6 +33,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     this.unsub?.();
     this.unsub = this.bridge.onChange((state) => this.postState(state));
+    this.unsubCredits?.();
+    this.unsubCredits = this.credits.onChange(() => this.postCredits());
 
     webviewView.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
@@ -78,19 +83,56 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
         case "ready":
           this.postPrefs();
+          this.postCredits();
           break;
+        case "claim": {
+          const prefs = this.prefs.get();
+          if (!isEvmAddress(prefs.wallet) || !prefs.chainId) {
+            vscode.window.showWarningMessage("Session: set a wallet and a mainnet chain to receive USDC.");
+            break;
+          }
+          const claimed = this.credits.claim();
+          this.postCredits();
+          if (claimed.cents <= 0) break;
+          const amount = (BigInt(claimed.cents) * 10_000n).toString();
+          this.bridge.setPlayer(prefs.wallet as `0x${string}`, prefs.chainId);
+          this.bridge.claimReward(amount, {
+            onReward: (txHash, chainName) => {
+              this.credits.markSent(claimed.cents, prefs.wallet, chainName, txHash);
+              this.postCredits();
+              vscode.window.showInformationMessage(`Session: ${claimed.cents / 100} USDC sent on ${chainName}.`);
+            },
+            onError: (message) => {
+              this.credits.restore(claimed.cents, message);
+              this.postCredits();
+              vscode.window.showErrorMessage(`Session: ${message}`);
+            },
+          });
+          break;
+        }
         case "savePrefs": {
           const games = Array.isArray(msg.games)
             ? msg.games.filter((game: string): game is GameId =>
                 (GAME_IDS as readonly string[]).includes(game),
               )
             : [];
-          const saved = await this.prefs.update({
+          const wallet = String(msg.wallet ?? "").trim();
+          const chain = EVM_CHAINS.find((item) => item.id === Number(msg.chainId));
+          if (!isEvmAddress(wallet) || !chain) {
+            this.view?.webview.postMessage({
+              type: "prefsError",
+              message: "Enter a 0x wallet address and an EVM chain.",
+            });
+            break;
+          }
+          await this.prefs.update({
             games,
             multiplayer: Boolean(msg.multiplayer),
+            wallet,
+            chainId: chain.id,
           });
+          this.bridge.setPlayer(wallet as `0x${string}`, chain.id);
           this.postPrefs();
-          this.openBoard(saved.games[0]);
           break;
         }
       }
@@ -98,7 +140,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     webviewView.onDidDispose(() => {
       this.unsub?.();
+      this.unsubCredits?.();
       this.unsub = undefined;
+      this.unsubCredits = undefined;
       this.view = undefined;
     });
   }
@@ -113,6 +157,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private postPrefs() {
     this.view?.webview.postMessage({ type: "prefs", prefs: this.prefs.get() });
+  }
+
+  private postCredits() {
+    this.view?.webview.postMessage({ type: "credits", credits: this.credits.view() });
   }
 
   private html(webview: vscode.Webview): string {
@@ -161,7 +209,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-editor-background);
     }
     .row { display: flex; justify-content: space-between; gap: 6px; align-items: center; }
-    button, input {
+    select, button, input {
       font: inherit;
       border-radius: 6px;
       border: 1px solid var(--vscode-button-border, transparent);
@@ -183,7 +231,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
     details { margin-top: 12px; }
     details summary { cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.7; }
-    input {
+    select, input {
       width: 100%;
       box-sizing: border-box;
       background: var(--vscode-input-background);
@@ -199,6 +247,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       background: color-mix(in srgb, var(--vscode-button-background) 30%, transparent);
     }
     .choice { display: flex; align-items: center; gap: 8px; margin: 6px 0; cursor: pointer; }
+    .ledger { margin-top: 8px; }
+    .ledger a {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      color: inherit;
+      text-decoration: none;
+      padding: 5px 0;
+      border-top: 1px solid var(--vscode-widget-border, #444);
+    }
     .choice input { width: auto; margin: 0; }
   </style>
 </head>
@@ -215,11 +274,35 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <label class="choice"><input type="checkbox" data-game="chess" checked /> Chess</label>
     <label class="choice"><input type="checkbox" data-game="sudoku" /> Sudoku</label>
     <label class="choice"><input type="checkbox" data-game="maths" /> Maths</label>
+    <label class="choice"><input type="checkbox" data-game="mate" /> Mate in 1</label>
     <label class="choice"><input type="checkbox" id="multiplayer" checked /> Multiplayer</label>
-    <div class="empty" id="gamesHint">Multiplayer pairs a chess game with whoever is waiting. Sudoku and maths are solo puzzles.</div>
+    <label class="empty" for="wallet">Wallet</label>
+    <input id="wallet" placeholder="0x…" spellcheck="false" />
+    <label class="empty" for="chain">Chain</label>
+    <select id="chain">
+      <option value="84532">Base Sepolia</option>
+      <option value="11155111">Ethereum Sepolia</option>
+      <option value="1">Ethereum</option>
+      <option value="8453">Base</option>
+      <option value="42161">Arbitrum</option>
+      <option value="10">Optimism</option>
+      <option value="137">Polygon</option>
+    </select>
+    <div class="err" id="walletErr"></div>
+    <div class="empty" id="gamesHint">Prompt the agent to open the next puzzle. Multiplayer chess pairs with whoever is waiting.</div>
+    <div class="mono" id="walletLine"></div>
     <button id="savePrefs">Continue</button>
   </div>
   <div id="app" style="display:none">
+  <div class="card" id="creditsCard">
+    <h2 style="margin-top:0">Credits</h2>
+    <div class="row"><span>Today</span><span class="mono" id="creditToday">$0.00</span></div>
+    <div class="row"><span>While the agent works</span><span class="mono" id="creditPending">$0.00</span></div>
+    <div class="row"><span>Ready to claim</span><span class="mono" id="creditReady">$0.00</span></div>
+    <div class="empty" id="creditNote">USDC pays on Ethereum, Base, Arbitrum, Optimism, or Polygon.</div>
+    <button class="next" id="claim" disabled>Claim</button>
+    <div class="ledger" id="ledger"></div>
+  </div>
   <button class="next" id="next">Next</button>
   <div class="empty" id="nextHint" style="margin-top:6px">Pairs you with whoever is already waiting. No room.</div>
 
@@ -262,9 +345,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     $('joinRoom').onclick = () => vscode.postMessage({ type: 'joinRoom', code: $('roomCode').value });
     $('leaveRoom').onclick = () => vscode.postMessage({ type: 'leaveRoom' });
     $('next').onclick = () => vscode.postMessage({ type: 'next' });
+    $('claim').onclick = () => vscode.postMessage({ type: 'claim' });
     $('savePrefs').onclick = () => {
       const games = Array.from(document.querySelectorAll('[data-game]:checked')).map((el) => el.getAttribute('data-game'));
-      vscode.postMessage({ type: 'savePrefs', games, multiplayer: $('multiplayer').checked });
+      const wallet = $('wallet').value.trim();
+      $('walletErr').textContent = /^0x[a-fA-F0-9]{40}$/.test(wallet)
+        ? ''
+        : 'Enter an EVM address: 0x and 40 hex characters.';
+      if ($('walletErr').textContent) return;
+      vscode.postMessage({
+        type: 'savePrefs',
+        games,
+        multiplayer: $('multiplayer').checked,
+        wallet,
+        chainId: Number($('chain').value),
+      });
     };
     $('multiplayer').onchange = () => {
       if ($('multiplayer').checked) document.querySelector('[data-game="chess"]').checked = true;
@@ -274,23 +369,69 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     function chessMulti() {
       return prefs.multiplayer && prefs.games.indexOf('chess') !== -1;
     }
+    function renderLedger(rows) {
+      const box = $('ledger');
+      box.textContent = '';
+      if (!rows.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'Claims show up here with the chain and the Base transaction.';
+        box.appendChild(empty);
+        return;
+      }
+      rows.forEach((row) => {
+        const link = document.createElement('a');
+        link.href = typeof row.href === 'string' ? row.href : '#';
+        const amount = document.createElement('span');
+        amount.textContent = (row.usd || '') + ' · ' + (row.chainName || '');
+        const tx = document.createElement('span');
+        tx.className = 'mono';
+        tx.textContent = row.tx || '';
+        link.appendChild(amount);
+        link.appendChild(tx);
+        box.appendChild(link);
+      });
+    }
+
     function applyPrefs(next) {
       prefs = next;
       document.querySelectorAll('[data-game]').forEach((el) => {
         el.checked = prefs.games.indexOf(el.getAttribute('data-game')) !== -1;
       });
       $('multiplayer').checked = !!prefs.multiplayer;
+      if (document.activeElement !== $('wallet')) $('wallet').value = prefs.wallet || '';
+      if (prefs.chainId) $('chain').value = String(prefs.chainId);
       $('app').style.display = prefs.onboarded ? '' : 'none';
       $('savePrefs').textContent = prefs.onboarded ? 'Save' : 'Continue';
       $('onboardLead').textContent = prefs.onboarded
-        ? 'Change games anytime. Sudoku and maths open on the board.'
-        : 'Pick what you want while you code.';
+        ? 'Prompt the agent to start the next puzzle. You can change these anytime.'
+        : 'Pick your games, then add the EVM wallet that plays them.';
+      const chains = { 84532: 'Base Sepolia', 11155111: 'Ethereum Sepolia', 1: 'Ethereum', 8453: 'Base', 42161: 'Arbitrum', 10: 'Optimism', 137: 'Polygon' };
+      $('walletLine').textContent = prefs.wallet
+        ? prefs.wallet.slice(0, 6) + '…' + prefs.wallet.slice(-4) + ' · ' + (chains[prefs.chainId] || 'EVM')
+        : '';
     }
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (msg.type === 'prefs') {
         applyPrefs(msg.prefs);
+        $('walletErr').textContent = '';
+        return;
+      }
+      if (msg.type === 'credits') {
+        const c = msg.credits || {};
+        $('creditToday').textContent = c.today || '$0.00';
+        $('creditPending').textContent = c.pending || '$0.00';
+        $('creditReady').textContent = c.claimable || '$0.00';
+        $('creditNote').textContent = c.note || $('creditNote').textContent;
+        $('claim').disabled = !c.canClaim;
+        $('claim').textContent = c.claimLabel || 'Claim';
+        renderLedger(Array.isArray(c.ledger) ? c.ledger : []);
+        return;
+      }
+      if (msg.type === 'prefsError') {
+        $('walletErr').textContent = msg.message || 'Check the wallet and chain.';
         return;
       }
       if (msg.type !== 'state') return;
