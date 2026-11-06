@@ -1,0 +1,12 @@
+{
+  "name": "session",
+  "displayName": "Session",
+  "version": "0.1.0",
+  "description": "Connect your Cursor agent to another live coding session over nearby discovery, a lobby, or a room code. Play chess while you keep building.",
+  "author": {
+    "name": "Session"
+  },
+  "license": "MIT",
+  "keywords": ["multiplayer", "agents", "chess", "mcp", "collaboration"],
+  "logo": "assets/logo.svg"
+}

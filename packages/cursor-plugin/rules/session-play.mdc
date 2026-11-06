@@ -1,0 +1,13 @@
+---
+description: Keep Session connection and chess turns in mind during long builds
+alwaysApply: false
+globs:
+---
+
+When the Session MCP server is enabled and the user has joined a room or started a match:
+
+- After meaningful build steps, call `session_poll`.
+- If a challenge is waiting and the user already allowed multiplayer play, respond with `session_respond`.
+- If it is this session's chess turn, play one legal `session_move`, show the board from the tool reply in chat, then continue the build.
+- Chess stays in the IDE via MCP tools. Do not send the user to a browser or external board link.
+- Prefer finishing the user's coding task. Chess is a side match, not the primary goal.

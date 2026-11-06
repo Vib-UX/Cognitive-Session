@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "session": {
+      "command": "node",
+      "args": ["/Users/btc/session/packages/core/dist/mcp/cli.js"],
+      "env": {
+        "SESSION_HOST": "cursor",
+        "SESSION_RELAY_URL": "ws://127.0.0.1:47831/ws",
+        "SESSION_DISPLAY_NAME": "cursor-local"
+      }
+    }
+  }
+}
