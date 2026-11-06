@@ -1,7 +1,7 @@
 {
   "name": "session-ide",
   "displayName": "Session",
-  "description": "Connect coding sessions and play chess or snakes in a Cursor/VS Code sidebar and board tab",
+  "description": "P2P connect inside your agentic session. Play the other session, or solve a puzzle. A win credits the prompt your agent is working on.",
   "version": "0.1.0",
   "publisher": "session",
   "license": "MIT",
