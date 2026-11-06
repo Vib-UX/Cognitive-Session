@@ -190,32 +190,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       font-size: var(--vscode-font-size);
       color: var(--vscode-foreground);
     }
-    body { margin: 0; padding: 10px; }
-    h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.7; margin: 14px 0 6px; }
-    .status { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: #888; }
-    .dot.on { background: #3fb950; box-shadow: 0 0 0 3px rgba(63,185,80,0.2); }
-    .mono { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: 0.8; }
-    .me { font-size: 12px; line-height: 1.35; margin: 2px 0 4px; }
-    .me .you {
-      display: inline-block;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      margin-right: 6px;
-      padding: 1px 6px;
-      border-radius: 999px;
-      background: color-mix(in srgb, var(--vscode-button-background) 45%, transparent);
-    }
+    body { margin: 0; padding: 14px 12px 20px; }
+    h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.65; margin: 16px 0 8px; }
+    .status { display: flex; align-items: center; gap: 8px; font-size: 12px; opacity: 0.85; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #888; flex: none; }
+    .dot.on { background: #3fb950; box-shadow: 0 0 0 3px rgba(63,185,80,0.18); }
+    .mono { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: 0.75; }
+    .me { font-size: 13px; font-weight: 600; margin: 8px 0 14px; }
     .card {
       border: 1px solid var(--vscode-widget-border, #444);
-      border-radius: 8px;
-      padding: 8px;
-      margin-bottom: 6px;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 10px;
       background: var(--vscode-editor-background);
     }
-    .row { display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+    .row { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin: 6px 0; }
     select, button, input {
       font: inherit;
       border-radius: 6px;
@@ -234,6 +223,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     button.next {
       width: 100%;
       margin-top: 8px;
+      padding: 8px 10px;
       font-weight: 600;
     }
     details { margin-top: 12px; }
@@ -246,14 +236,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       border-color: var(--vscode-input-border, #555);
       margin: 4px 0 8px;
     }
-    .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .stack { display: grid; gap: 8px; margin-top: 12px; }
+    .stack button.next { margin-top: 0; }
+    label.field { display: block; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.65; margin-top: 4px; }
     .err { color: var(--vscode-errorForeground); font-size: 12px; }
     .empty { opacity: 0.6; font-size: 12px; }
     .badge {
       font-size: 10px; padding: 1px 6px; border-radius: 999px;
       background: color-mix(in srgb, var(--vscode-button-background) 30%, transparent);
     }
-    .choice { display: flex; align-items: center; gap: 8px; margin: 6px 0; cursor: pointer; }
+    .games { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; margin-bottom: 8px; }
+    .choice { display: flex; align-items: center; gap: 8px; margin: 4px 0; cursor: pointer; }
+    .choice.wide { grid-column: 1 / -1; }
     .ledger { margin-top: 8px; }
     .ledger a {
       display: flex;
@@ -277,16 +272,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   <div id="err" class="err"></div>
   <div class="card" id="gamesCard">
     <h2 style="margin-top:0">Play</h2>
-    <div class="empty" id="onboardLead">Pick what you want while you code.</div>
-    <label class="choice"><input type="checkbox" data-game="chess" checked /> Chess</label>
-    <label class="choice"><input type="checkbox" data-game="snakes" checked /> Snakes</label>
-    <label class="choice"><input type="checkbox" data-game="sudoku" /> Sudoku</label>
-    <label class="choice"><input type="checkbox" data-game="maths" /> Maths</label>
-    <label class="choice"><input type="checkbox" data-game="mate" /> Mate in 1</label>
-    <label class="choice"><input type="checkbox" id="multiplayer" checked /> Multiplayer</label>
-    <label class="empty" for="wallet">Wallet</label>
+    <div class="games">
+      <label class="choice"><input type="checkbox" data-game="chess" checked /> Chess</label>
+      <label class="choice"><input type="checkbox" data-game="snakes" checked /> Snakes</label>
+      <label class="choice"><input type="checkbox" data-game="sudoku" /> Sudoku</label>
+      <label class="choice"><input type="checkbox" data-game="maths" /> Maths</label>
+      <label class="choice"><input type="checkbox" data-game="mate" /> Mate in 1</label>
+      <label class="choice wide"><input type="checkbox" id="multiplayer" checked /> Multiplayer</label>
+    </div>
+    <label class="field" for="wallet">Wallet</label>
     <input id="wallet" placeholder="0x…" spellcheck="false" />
-    <label class="empty" for="chain">Chain</label>
+    <label class="field" for="chain">Chain</label>
     <select id="chain">
       <option value="84532">Base Sepolia</option>
       <option value="11155111">Ethereum Sepolia</option>
@@ -297,23 +293,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <option value="137">Polygon</option>
     </select>
     <div class="err" id="walletErr"></div>
-    <div class="empty" id="gamesHint">Prompt the agent to open the next puzzle. Snakes joins the shared arena. Multiplayer chess pairs with whoever is waiting.</div>
-    <div class="mono" id="walletLine"></div>
-    <button id="savePrefs">Continue</button>
+    <button class="next" id="savePrefs" style="margin-top:0">Continue</button>
   </div>
   <div id="app" style="display:none">
   <div class="card" id="creditsCard">
     <h2 style="margin-top:0">Credits</h2>
     <div class="row"><span>Today</span><span class="mono" id="creditToday">$0.00</span></div>
-    <div class="row"><span>While the agent works</span><span class="mono" id="creditPending">$0.00</span></div>
-    <div class="row"><span>Ready to claim</span><span class="mono" id="creditReady">$0.00</span></div>
-    <div class="empty" id="creditNote">USDC pays on Ethereum, Base, Arbitrum, Optimism, or Polygon.</div>
+    <div class="row"><span>Pending</span><span class="mono" id="creditPending">$0.00</span></div>
+    <div class="row"><span>Claimable</span><span class="mono" id="creditReady">$0.00</span></div>
+    <div class="empty" id="creditNote" style="display:none"></div>
     <button class="next" id="claim" disabled>Claim</button>
     <div class="ledger" id="ledger"></div>
   </div>
-  <button class="next" id="playSnakes">Play snakes</button>
-  <button class="next" id="next">Next</button>
-  <div class="empty" id="nextHint" style="margin-top:6px">Pairs you with whoever is already waiting. No room.</div>
+  <div class="stack">
+    <button class="next" id="playSnakes">Play snakes</button>
+    <button class="next" id="next">Play</button>
+  </div>
 
   <div class="actions">
     <button class="secondary" id="connect">Connect</button>
@@ -321,19 +316,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <button class="secondary" id="openBoard">Open board</button>
   </div>
 
-  <h2>Lobby</h2>
-  <div class="empty" style="margin-bottom:6px">Hit Next. If someone is waiting, the board opens with them. If not, you wait for the next person.</div>
+  <h2>Session</h2>
   <div id="peers"></div>
 
-  <h2>Challenges</h2>
-  <div id="challenges"></div>
+  <div id="challengeBlock" style="display:none">
+    <h2>Challenges</h2>
+    <div id="challenges"></div>
+  </div>
 
-  <h2>Pings</h2>
-  <div id="pings"></div>
+  <div id="pingBlock" style="display:none">
+    <h2>Pings</h2>
+    <div id="pings"></div>
+  </div>
 
   <details>
-    <summary>Room (optional)</summary>
-    <div id="room" class="card empty">Not in a room</div>
+    <summary>Room</summary>
+    <div id="room" class="card" style="display:none"></div>
     <input id="roomCode" placeholder="Room code (e.g. AB12)" />
     <div class="actions">
       <button id="createRoom">Create room</button>
@@ -382,13 +380,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     function renderLedger(rows) {
       const box = $('ledger');
       box.textContent = '';
-      if (!rows.length) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.textContent = 'Claims show up here with the chain and the Base transaction.';
-        box.appendChild(empty);
-        return;
-      }
+      if (!rows.length) return;
       rows.forEach((row) => {
         const link = document.createElement('a');
         link.href = typeof row.href === 'string' ? row.href : '#';
@@ -413,13 +405,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       if (prefs.chainId) $('chain').value = String(prefs.chainId);
       $('app').style.display = prefs.onboarded ? '' : 'none';
       $('savePrefs').textContent = prefs.onboarded ? 'Save' : 'Continue';
-      $('onboardLead').textContent = prefs.onboarded
-        ? 'Prompt the agent to start the next puzzle. You can change these anytime.'
-        : 'Pick your games, then add the EVM wallet that plays them.';
-      const chains = { 84532: 'Base Sepolia', 11155111: 'Ethereum Sepolia', 1: 'Ethereum', 8453: 'Base', 42161: 'Arbitrum', 10: 'Optimism', 137: 'Polygon' };
-      $('walletLine').textContent = prefs.wallet
-        ? prefs.wallet.slice(0, 6) + '…' + prefs.wallet.slice(-4) + ' · ' + (chains[prefs.chainId] || 'EVM')
-        : '';
     }
 
     window.addEventListener('message', (event) => {
@@ -434,7 +419,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         $('creditToday').textContent = c.today || '$0.00';
         $('creditPending').textContent = c.pending || '$0.00';
         $('creditReady').textContent = c.claimable || '$0.00';
-        $('creditNote').textContent = c.note || $('creditNote').textContent;
+        const note = c.note || '';
+        const quiet = !note || note.indexOf('ready to claim') !== -1 || note.indexOf('Solves pay') !== -1 || note.indexOf('USDC pays') !== -1;
+        $('creditNote').style.display = quiet ? 'none' : '';
+        $('creditNote').textContent = quiet ? '' : note;
         $('claim').disabled = !c.canClaim;
         $('claim').textContent = c.claimLabel || 'Claim';
         renderLedger(Array.isArray(c.ledger) ? c.ledger : []);
@@ -450,44 +438,32 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       $('statusText').textContent = !s.connected
         ? 'Disconnected'
         : s.drawing
-          ? 'Drawing the opening on Base'
+          ? 'Drawing'
           : s.seeking
-            ? 'Waiting for the next person'
-            : (s.waiting > 0 ? 'Connected · ' + s.waiting + ' waiting' : 'Connected to relay');
-      if (!chessMulti()) {
-        $('next').textContent = 'Play';
-        $('nextHint').textContent = 'Opens the puzzles you picked. Turn on multiplayer to pair a chess game.';
-      } else {
-        $('next').textContent = s.drawing ? 'Drawing…' : (s.seeking ? 'Waiting…' : 'Next');
-        $('nextHint').textContent = s.drawing
-          ? 'Paired. Chainlink VRF on Base is choosing who plays white.'
+            ? 'Waiting'
+            : (s.waiting > 0 ? 'Connected · ' + s.waiting : 'Connected');
+      $('next').textContent = !chessMulti()
+        ? 'Play'
+        : s.drawing
+          ? 'Drawing…'
           : s.seeking
-          ? 'You are in the queue. The next person who hits Next joins you.'
-          : (s.waiting > 0
-            ? 'Someone is waiting. Next opens a game with them.'
-            : 'Pairs you with whoever is already waiting. No room.');
-      }
-      $('me').innerHTML = s.me
-        ? '<span class="you">You</span>' + (s.me.ensName || s.me.displayName) +
-          '<div class="mono">' + s.me.id + '</div>'
-        : '';
+            ? 'Waiting…'
+            : 'Next';
+      $('me').textContent = s.me ? (s.me.ensName || s.me.displayName) : '';
       $('err').textContent = s.error || '';
 
       if (s.room) {
+        $('room').style.display = '';
         $('room').className = 'card';
         $('room').innerHTML = '<div class="row"><strong class="mono">' + s.room.code + '</strong><span class="badge">' +
-          s.room.members.length + ' members</span></div>' +
-          (s.room.matchId ? '<div class="mono">match ' + s.room.matchId + '</div>' : '');
+          s.room.members.length + '</span></div>';
       } else {
-        $('room').className = 'card empty';
-        $('room').textContent = 'Not in a room';
+        $('room').style.display = 'none';
+        $('room').textContent = '';
       }
 
       const peers = $('peers');
       peers.innerHTML = '';
-      if (!s.peers.length) {
-        peers.innerHTML = '<div class="empty">No other sessions online</div>';
-      }
       for (const p of s.peers) {
         const el = document.createElement('div');
         el.className = 'card';
@@ -511,7 +487,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       const ch = $('challenges');
       ch.innerHTML = '';
-      if (!s.challenges.length) ch.innerHTML = '<div class="empty">None</div>';
+      $('challengeBlock').style.display = s.challenges.length ? '' : 'none';
       for (const c of s.challenges) {
         const el = document.createElement('div');
         el.className = 'card';
@@ -536,7 +512,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const pings = $('pings');
       pings.innerHTML = '';
       const recent = (s.pings || []).slice().reverse().slice(0, 5);
-      if (!recent.length) pings.innerHTML = '<div class="empty">None yet</div>';
+      $('pingBlock').style.display = recent.length ? '' : 'none';
       for (const p of recent) {
         const el = document.createElement('div');
         el.className = 'card';

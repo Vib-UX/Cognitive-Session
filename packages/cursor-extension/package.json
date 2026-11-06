@@ -1,10 +1,15 @@
 {
   "name": "session-ide",
   "displayName": "Session",
-    "description": "Connect coding sessions and play chess or snakes in a Cursor/VS Code sidebar and board tab",
+  "description": "Connect coding sessions and play chess or snakes in a Cursor/VS Code sidebar and board tab",
   "version": "0.1.0",
   "publisher": "session",
-  "private": true,
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Vib-UX/Cognitive-Session.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -30,7 +35,7 @@
         {
           "type": "webview",
           "id": "session.sidebar",
-          "name": "Lobby"
+          "name": "Session"
         }
       ]
     },
@@ -85,12 +90,13 @@
         "session.displayName": {
           "type": "string",
           "default": "",
-          "description": "Display name in the lobby (blank = hostname)"
+          "description": "Display name in the session (blank = hostname)"
         }
       }
     }
   },
   "scripts": {
+    "vscode:prepublish": "pnpm run build",
     "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "pnpm build --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",

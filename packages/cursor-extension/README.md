@@ -1,25 +1,10 @@
-# Session IDE (Cursor / VS Code extension)
+# Session
 
-In-IDE UI for Session: **Lobby sidebar** + **Chess board tab**. Same relay as the agent plugin.
+Connect coding sessions and play chess or snakes from a sidebar and board tab inside Cursor or VS Code.
 
-## What you get
+The sidebar is **Session**. Snakes joins the shared arena. Chess pairs with whoever is already waiting when multiplayer is on.
 
-- Activity Bar icon **Session** → Lobby webview (peers, room codes, ping, challenge)
-- Command **Session: Open chess board** → board opens in an editor tab
-- Click two squares (or type UCI) to move — stays inside Cursor, no browser
+## Settings
 
-## Run
-
-```bash
-# terminal 1 — required backend
-pnpm --filter @session/relay start
-
-# build + install this extension
-pnpm --filter session-ide build
-# then install the folder / vsix (see root README)
-```
-
-Settings:
-
-- `session.relayUrl` — default `ws://127.0.0.1:47831/ws`
-- `session.displayName` — lobby name
+- `session.relayUrl` — defaults to the public relay
+- `session.displayName` — name shown to other sessions

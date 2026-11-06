@@ -1271,6 +1271,8 @@ export class BoardPanel {
     let snakeSent = '';
     const snakePressed = [];
     const snakePose = new Map();
+    let snakeSim = null;
+    let snakeSeenAt = 0;
     let snakeScoreSig = '';
     let snakeClock = '';
     let snakeGrid = null;
@@ -1289,35 +1291,106 @@ export class BoardPanel {
       const me = (match.players || []).find((p) => state.me && p.id === state.me.id);
       return match.roomCode + ' · ' + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') + (me && !me.alive ? ' · respawning' : '');
     }
-    function alignPose(prev, next) {
-      if (!prev || !prev.length) return next.map((cell) => ({ x: cell.x, y: cell.y }));
-      const grown = next.length - prev.length;
-      if (grown === 0) return prev;
-      if (grown > 0 && grown <= 2) {
-        const pad = [];
-        for (let i = 0; i < grown; i++) pad.push(prev[0]);
-        return pad.concat(prev).slice(0, next.length);
-      }
-      if (grown < 0 && grown >= -2) return prev.slice(0, next.length);
-      return next.map((cell) => ({ x: cell.x, y: cell.y }));
+    const SNAKE_TICK = 110;
+    const SNAKE_LEAD = 5;
+    const SNAKE_STEP = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } };
+    function oppositeDir(dir) {
+      if (dir === 'up') return 'down';
+      if (dir === 'down') return 'up';
+      if (dir === 'left') return 'right';
+      return 'left';
     }
-    function poseOf(player, dt) {
-      const next = player.body || [];
-      if (!next.length) {
-        snakePose.delete(player.id);
-        return next;
+    function copyBody(body) {
+      return body.map((cell) => ({ x: cell.x, y: cell.y }));
+    }
+    function stepBody(body, dir) {
+      const head = body[0];
+      if (!head) return body;
+      const delta = SNAKE_STEP[dir] || SNAKE_STEP.right;
+      const next = [{ x: head.x + delta.x, y: head.y + delta.y }].concat(body);
+      next.pop();
+      return next;
+    }
+    function slideBody(body, dir, frac) {
+      if (frac <= 0 || !body.length) return body;
+      const delta = SNAKE_STEP[dir] || SNAKE_STEP.right;
+      const out = [{ x: body[0].x + delta.x * frac, y: body[0].y + delta.y * frac }];
+      for (let i = 1; i < body.length; i++) {
+        out.push({
+          x: body[i].x + (body[i - 1].x - body[i].x) * frac,
+          y: body[i].y + (body[i - 1].y - body[i].y) * frac,
+        });
       }
-      const aligned = alignPose(snakePose.get(player.id), next);
+      return out;
+    }
+    function leadOf(head, server, dir) {
+      const delta = SNAKE_STEP[dir] || SNAKE_STEP.right;
+      return (head.x - server.x) * delta.x + (head.y - server.y) * delta.y;
+    }
+    function reconcileSim(server, dir) {
+      const head = snakeSim.body[0];
+      const serverHead = server[0];
+      if (!head || !serverHead) {
+        snakeSim.body = copyBody(server);
+        snakeSim.dir = dir;
+        snakeSim.acc = 0;
+        return;
+      }
+      const dx = head.x - serverHead.x;
+      const dy = head.y - serverHead.y;
+      if (dx * dx + dy * dy > 16) {
+        snakeSim.body = copyBody(server);
+        snakeSim.dir = dir;
+        snakeSim.acc = 0;
+        return;
+      }
+      const grew = server.length - snakeSim.body.length;
+      if (grew === 0) return;
+      if (grew > 0 && grew <= 2) {
+        const tail = snakeSim.body[snakeSim.body.length - 1] || head;
+        for (let i = 0; i < grew; i++) snakeSim.body.push({ x: tail.x, y: tail.y });
+        return;
+      }
+      if (grew < 0 && snakeSim.body.length + grew >= 2) {
+        snakeSim.body = snakeSim.body.slice(0, server.length);
+        return;
+      }
+      snakeSim.body = copyBody(server);
+      snakeSim.acc = 0;
+    }
+    function advanceSim(serverHead, want, boost, dt) {
+      const hops = boost && snakeSim.body.length > 10 ? 2 : 1;
+      const maxLead = hops * SNAKE_LEAD;
+      snakeSim.acc += dt;
+      let guard = 0;
+      while (snakeSim.acc >= SNAKE_TICK && snakeSim.body[0] && guard < 4) {
+        const dir = want !== oppositeDir(snakeSim.dir) ? want : snakeSim.dir;
+        if (leadOf(snakeSim.body[0], serverHead, dir) >= maxLead) break;
+        snakeSim.dir = dir;
+        snakeSim.acc -= SNAKE_TICK;
+        guard += 1;
+        for (let hop = 0; hop < hops; hop++) snakeSim.body = stepBody(snakeSim.body, snakeSim.dir);
+      }
+      if (snakeSim.acc > SNAKE_TICK) snakeSim.acc = SNAKE_TICK;
+      const head = snakeSim.body[0];
+      const frac = head && leadOf(head, serverHead, snakeSim.dir) >= maxLead ? 0 : Math.min(snakeSim.acc / SNAKE_TICK, 1);
+      return slideBody(snakeSim.body, snakeSim.dir, frac);
+    }
+    function extrapolate(body, dir, ageMs) {
+      const extra = Math.min(Math.max(0, ageMs) / SNAKE_TICK, 1.6);
+      let pts = copyBody(body);
+      const whole = Math.floor(extra);
+      for (let i = 0; i < whole; i++) pts = stepBody(pts, dir);
+      return slideBody(pts, dir, extra - whole);
+    }
+    function easeToward(prev, next, dt) {
+      if (!prev || prev.length !== next.length) return next;
       const slow = 1 - Math.exp(-dt / 36);
       const fast = 1 - Math.exp(-dt / 16);
       const out = [];
       for (let i = 0; i < next.length; i++) {
         const cell = next[i];
-        const cur = aligned[i];
-        if (!cur) {
-          out.push({ x: cell.x, y: cell.y });
-          continue;
-        }
+        const cur = prev[i];
         const dx = cell.x - cur.x;
         const dy = cell.y - cur.y;
         const dist = dx * dx + dy * dy;
@@ -1328,8 +1401,31 @@ export class BoardPanel {
         const k = dist > 6.25 ? fast : slow;
         out.push({ x: cur.x + dx * k, y: cur.y + dy * k });
       }
-      snakePose.set(player.id, out);
       return out;
+    }
+    function poseOf(player, dt, age, matchId) {
+      const next = player.body || [];
+      const mine = state.me && player.id === state.me.id;
+      if (!next.length || !player.alive) {
+        if (mine) snakeSim = null;
+        snakePose.delete(player.id);
+        return [];
+      }
+      if (mine) {
+        const want = snakeDir && snakeDir !== oppositeDir(player.dir) ? snakeDir : player.dir;
+        if (!snakeSim || snakeSim.matchId !== matchId) {
+          snakeSim = { matchId: matchId, body: copyBody(next), dir: want, acc: 0 };
+        } else {
+          reconcileSim(next, player.dir);
+        }
+        const drawn = advanceSim(next[0], want, snakeBoost && next.length > 10, dt || 16);
+        snakePose.set(player.id, drawn);
+        return drawn;
+      }
+      const target = extrapolate(next, player.dir, age);
+      const eased = easeToward(snakePose.get(player.id), target, dt || 16);
+      snakePose.set(player.id, eased);
+      return eased;
     }
     function syncSnakeHud(match) {
       const clock = snakeHeadline(match);
@@ -1410,9 +1506,10 @@ export class BoardPanel {
         ctx.fill();
       }
       const seen = new Set();
+      const age = snakeSeenAt ? performance.now() - snakeSeenAt : 0;
       for (const player of match.players || []) {
         seen.add(player.id);
-        const body = poseOf(player, dt || 16);
+        const body = poseOf(player, dt || 16, age, match.matchId);
         if (body.length < 1) continue;
         ctx.globalAlpha = player.alive ? 1 : 0.35;
         ctx.strokeStyle = player.color;
@@ -1566,10 +1663,12 @@ export class BoardPanel {
           state.snake = msg.snake;
           if (msg.me) state.me = msg.me;
         }
+        snakeSeenAt = performance.now();
         return;
       }
       if (msg.type !== 'state') return;
       state = msg.state;
+      if (state && state.snake) snakeSeenAt = performance.now();
       if (activeGame === 'snakes') return;
       selected = null;
       render();

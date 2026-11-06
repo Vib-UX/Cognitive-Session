@@ -52,6 +52,108 @@ function alignPose(prev: Point[] | undefined, next: Point[]): Point[] {
   return next.map((cell) => ({ x: cell.x, y: cell.y }));
 }
 
+const TICK_MS = 110;
+const LEAD_CELLS = 5;
+const STEP: Record<SnakeDir, Point> = {
+  up: { x: 0, y: -1 },
+  down: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+};
+
+function copyBody(body: Point[]): Point[] {
+  return body.map((cell) => ({ x: cell.x, y: cell.y }));
+}
+
+function stepBody(body: Point[], dir: SnakeDir): Point[] {
+  const head = body[0];
+  if (!head) return body;
+  const delta = STEP[dir];
+  const next = [{ x: head.x + delta.x, y: head.y + delta.y }, ...body];
+  next.pop();
+  return next;
+}
+
+function slideBody(body: Point[], dir: SnakeDir, frac: number): Point[] {
+  if (frac <= 0 || body.length === 0) return body;
+  const head = body[0]!;
+  const delta = STEP[dir];
+  const out: Point[] = [{ x: head.x + delta.x * frac, y: head.y + delta.y * frac }];
+  for (let i = 1; i < body.length; i++) {
+    const prev = body[i - 1]!;
+    const cur = body[i]!;
+    out.push({
+      x: cur.x + (prev.x - cur.x) * frac,
+      y: cur.y + (prev.y - cur.y) * frac,
+    });
+  }
+  return out;
+}
+
+function leadOf(head: Point, server: Point, dir: SnakeDir): number {
+  const delta = STEP[dir];
+  return (head.x - server.x) * delta.x + (head.y - server.y) * delta.y;
+}
+
+type Sim = { matchId: string; body: Point[]; dir: SnakeDir; acc: number };
+
+function reconcileSim(sim: Sim, server: Point[], dir: SnakeDir): void {
+  const head = sim.body[0];
+  const serverHead = server[0];
+  if (!head || !serverHead) {
+    sim.body = copyBody(server);
+    sim.dir = dir;
+    sim.acc = 0;
+    return;
+  }
+  if (Math.hypot(head.x - serverHead.x, head.y - serverHead.y) > 4) {
+    sim.body = copyBody(server);
+    sim.dir = dir;
+    sim.acc = 0;
+    return;
+  }
+  const grew = server.length - sim.body.length;
+  if (grew === 0) return;
+  if (grew > 0 && grew <= 2) {
+    const tail = sim.body[sim.body.length - 1] ?? head;
+    for (let i = 0; i < grew; i++) sim.body.push({ x: tail.x, y: tail.y });
+    return;
+  }
+  if (grew < 0 && sim.body.length + grew >= 2) {
+    sim.body = sim.body.slice(0, server.length);
+    return;
+  }
+  sim.body = copyBody(server);
+  sim.acc = 0;
+}
+
+function advanceSim(sim: Sim, serverHead: Point, want: SnakeDir, boost: boolean, dt: number): Point[] {
+  const hops = boost && sim.body.length > 10 ? 2 : 1;
+  const maxLead = hops * LEAD_CELLS;
+  sim.acc += dt;
+  let guard = 0;
+  while (sim.acc >= TICK_MS && sim.body[0] && guard < 4) {
+    const dir = want !== opposite(sim.dir) ? want : sim.dir;
+    if (leadOf(sim.body[0], serverHead, dir) >= maxLead) break;
+    sim.dir = dir;
+    sim.acc -= TICK_MS;
+    guard += 1;
+    for (let hop = 0; hop < hops; hop++) sim.body = stepBody(sim.body, sim.dir);
+  }
+  if (sim.acc > TICK_MS) sim.acc = TICK_MS;
+  const head = sim.body[0];
+  const frac = head && leadOf(head, serverHead, sim.dir) >= maxLead ? 0 : Math.min(sim.acc / TICK_MS, 1);
+  return slideBody(sim.body, sim.dir, frac);
+}
+
+function extrapolate(body: Point[], dir: SnakeDir, ageMs: number): Point[] {
+  const extra = Math.min(Math.max(0, ageMs) / TICK_MS, 1.6);
+  let pts = copyBody(body);
+  const whole = Math.floor(extra);
+  for (let i = 0; i < whole; i++) pts = stepBody(pts, dir);
+  return slideBody(pts, dir, extra - whole);
+}
+
 function easePose(prev: Point[] | undefined, next: Point[], dt: number): Point[] {
   const aligned = alignPose(prev, next);
   const slow = 1 - Math.exp(-dt / 36);
@@ -215,6 +317,8 @@ export function SnakeArena() {
   const boostRef = useRef(false);
   const pressedRef = useRef<SnakeDir[]>([]);
   const posesRef = useRef<Map<string, Point[]>>(new Map());
+  const simRef = useRef<Sim | null>(null);
+  const arrivedRef = useRef(0);
   const sigRef = useRef("");
   const sentSteer = useRef("");
 
@@ -237,13 +341,32 @@ export function SnakeArena() {
       last = nowMs;
       const poses = posesRef.current;
       const seen = new Set<string>();
+      const age = arrivedRef.current ? nowMs - arrivedRef.current : 0;
       for (const player of current.players) {
         seen.add(player.id);
-        if (player.body.length === 0) {
+        const mine = player.id === myIdRef.current;
+        if (player.body.length === 0 || !player.alive) {
+          if (mine) simRef.current = null;
           poses.delete(player.id);
           continue;
         }
-        poses.set(player.id, easePose(poses.get(player.id), player.body, dt));
+        if (mine) {
+          const want =
+            facingRef.current && facingRef.current !== opposite(player.dir) ? facingRef.current : player.dir;
+          let sim = simRef.current;
+          if (!sim || sim.matchId !== current.matchId) {
+            sim = { matchId: current.matchId, body: copyBody(player.body), dir: want, acc: 0 };
+          } else {
+            reconcileSim(sim, player.body, player.dir);
+          }
+          simRef.current = sim;
+          const serverHead = player.body[0];
+          if (!serverHead) continue;
+          poses.set(player.id, advanceSim(sim, serverHead, want, boostRef.current, dt));
+          continue;
+        }
+        const target = extrapolate(player.body, player.dir, age);
+        poses.set(player.id, easePose(poses.get(player.id), target, dt));
       }
       for (const id of [...poses.keys()]) if (!seen.has(id)) poses.delete(id);
       drawArena(canvas, current, poses, myIdRef.current, facingRef.current);
@@ -342,6 +465,8 @@ export function SnakeArena() {
     boostRef.current = false;
     pressedRef.current = [];
     posesRef.current = new Map();
+    simRef.current = null;
+    arrivedRef.current = 0;
     sigRef.current = "";
     sentSteer.current = "";
     const id = newId();
@@ -379,6 +504,7 @@ export function SnakeArena() {
         setRoomCode(msg.room.code);
       } else if (msg.type === "snake" && msg.match) {
         matchRef.current = msg.match;
+        arrivedRef.current = performance.now();
         const sig = viewSig(msg.match);
         if (sig !== sigRef.current) {
           sigRef.current = sig;
