@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "steps": {
+    "build": {
+      "commands": ["pnpm --filter @session/relay build"]
+    }
+  },
+  "deploy": {
+    "startCommand": "node relay/dist/index.js"
+  }
+}

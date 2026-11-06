@@ -5,6 +5,7 @@
   "description": "Connect Cursor and Claude coding sessions, play chess while building, settle cross-chain wagers",
   "scripts": {
     "build": "pnpm -r run build",
+    "start": "node relay/dist/index.js",
     "dev:relay": "pnpm --filter @session/relay dev",
     "dev:web": "pnpm --filter @session/web dev",
     "dev:core": "pnpm --filter @session/core build --watch",
