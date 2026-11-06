@@ -141,13 +141,13 @@ export function WalletPanel({ match }: { match: ChessState | null }) {
 
   return (
     <div>
-      <p className="sub" style={{ marginBottom: "0.75rem" }}>
-        Equal stakes lock on Base Sepolia. After the game, CCIP 2.0 carries the result to
-        Ethereum Sepolia for payout.
+      <p className="note">
+        Equal stakes lock on Base Sepolia. After the game, CCIP carries the result to Ethereum
+        Sepolia.
       </p>
       {!match && <div className="empty">Start a chess match to enable deposits.</div>}
       {match && (
-        <>
+        <div className="stack">
           <label>
             Stake (ETH)
             <input
@@ -179,9 +179,11 @@ export function WalletPanel({ match }: { match: ChessState | null }) {
               Check Sepolia payout
             </button>
           </div>
-        </>
+        </div>
       )}
-      <p style={{ marginTop: "0.85rem", color: "var(--muted)" }}>{status}</p>
+      <p className="note" style={{ marginTop: "0.85rem" }}>
+        {status}
+      </p>
       {tx && (
         <a
           className="mono"
@@ -192,10 +194,7 @@ export function WalletPanel({ match }: { match: ChessState | null }) {
           {tx}
         </a>
       )}
-      <div
-        className="mono"
-        style={{ marginTop: "0.75rem", color: "var(--muted)", fontSize: "0.75rem" }}
-      >
+      <div className="fine">
         lock {LOCK_ADDRESS}
         <br />
         payout {PAYOUT_ADDRESS}

@@ -181,7 +181,7 @@ function gridLayer(css: number, width: number, height: number): HTMLCanvasElemen
   const ctx = canvas.getContext("2d");
   if (ctx) {
     const step = css / width;
-    ctx.strokeStyle = "rgba(255,255,255,0.045)";
+    ctx.strokeStyle = "rgba(250,249,245,0.055)";
     ctx.beginPath();
     for (let i = 1; i < width; i++) {
       const x = Math.round(i * step) + 0.5;
@@ -218,13 +218,13 @@ function drawArena(
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, css, css);
-  ctx.fillStyle = "#070b10";
+  ctx.fillStyle = "#1f1d19";
   ctx.fillRect(0, 0, css, css);
   ctx.drawImage(gridLayer(css, match.width, match.height), 0, 0, css, css);
   const cell = css / match.width;
 
   for (const pellet of match.pellets) {
-    ctx.fillStyle = pellet.value > 1 ? "#fde68a" : "#fbbf24";
+    ctx.fillStyle = pellet.value > 1 ? "#f0e6d6" : "#e07a5f";
     ctx.beginPath();
     ctx.arc(
       pellet.x * cell + cell / 2,
@@ -267,7 +267,7 @@ function drawArena(
       const oy = dir === "up" ? -1 : dir === "down" ? 1 : 0;
       const px = -oy;
       const py = ox;
-      ctx.fillStyle = "#071018";
+      ctx.fillStyle = "#1f1d19";
       for (const side of [-1, 1]) {
         ctx.beginPath();
         ctx.arc(
@@ -282,9 +282,9 @@ function drawArena(
     }
     ctx.globalAlpha = 1;
     if (cell < 8) continue;
-    ctx.font = `600 ${Math.max(11, cell * 0.7)}px "IBM Plex Sans", sans-serif`;
+    ctx.font = `500 ${Math.max(11, cell * 0.7)}px Newsreader, "Iowan Old Style", Palatino, serif`;
     ctx.textAlign = "center";
-    ctx.fillStyle = player.id === selfId ? "#ffffff" : "rgba(232,238,246,0.9)";
+    ctx.fillStyle = "rgba(250,249,245,0.92)";
     ctx.fillText(player.name, cx, cy - cell * 0.7);
   }
 }
@@ -560,14 +560,10 @@ export function SnakeArena() {
     <section className="panel snake-panel">
       <div className="snake-intro">
         <h2>Snakes</h2>
-        <p>
-          A shared arena on the relay. Eat the orbs, don't touch a body or the wall, and hold
-          boost to sprint. Highest score after 90 seconds wins. Leave the room blank and
-          everyone who hits Play shares one arena. A code starts or joins a private one.
-        </p>
+        <p>Blank code joins the open arena. Arrows to turn, space to sprint.</p>
         {import.meta.env.DEV && (
           <p className="hint">
-            This arena uses the local relay on port 47831. The lobby below is the public relay.
+            This table is the local relay. The list below is the public one.
           </p>
         )}
       </div>
