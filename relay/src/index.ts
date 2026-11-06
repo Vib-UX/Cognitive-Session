@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
+import { matchDrawAddress, pollDraws } from "./draw.js";
 import { SNAKE_TICK_MS } from "./snake.js";
 import { RelayStore } from "./store.js";
 
@@ -45,6 +46,18 @@ wss.on("connection", (ws) => {
 });
 
 setInterval(() => store.sweepStale(), 5000);
+if (matchDrawAddress()) {
+  setInterval(() => {
+    pollDraws()
+      .then((rows) => {
+        for (const row of rows) store.applyDraw(row.pairId, row.word);
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : "draw poll failed";
+        console.error("draw poll", message);
+      });
+  }, 8_000);
+}
 setInterval(() => store.sweepClocks(), 200);
 setInterval(() => store.tickSnakes(), SNAKE_TICK_MS);
 

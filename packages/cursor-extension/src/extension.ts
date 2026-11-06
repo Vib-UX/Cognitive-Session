@@ -27,6 +27,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
   bridge = new RelayBridge(relayUrl, displayName, instanceId);
   const prefs = new PrefsStore(context);
+  if (prefs.get().onboarded && !context.globalState.get("session.addedSnakes")) {
+    if (!prefs.get().games.includes("snakes")) {
+      await prefs.update({ games: [...prefs.get().games, "snakes"] });
+    }
+    await context.globalState.update("session.addedSnakes", true);
+  }
   if (prefs.get().onboarded && !context.globalState.get("session.addedMate")) {
     if (!prefs.get().games.includes("mate")) {
       await prefs.update({ games: [...prefs.get().games, "mate"] });
@@ -75,6 +81,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // When a match starts, open the board tab automatically
   let sawMatchId: string | null = null;
+  let sawSnakeId: string | null = null;
   let rewardedMatch: string | null = null;
   bridge.onChange((state) => {
     const id = state.match?.matchId ?? null;
@@ -84,6 +91,21 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.window.setStatusBarMessage(`Session: match ${id} started`, 4000);
     }
     if (!id) sawMatchId = null;
+    const snakeId = state.snake?.matchId ?? null;
+    const inSnake = state.snake?.players.some(
+      (player) => player.id === state.me?.id && player.connected,
+    );
+    if (
+      snakeId &&
+      state.snake?.status !== "finished" &&
+      inSnake &&
+      prefs.get().games.includes("snakes") &&
+      snakeId !== sawSnakeId
+    ) {
+      sawSnakeId = snakeId;
+      openBoard("snakes");
+    }
+    if (!inSnake) sawSnakeId = null;
     const result = state.match?.result as { kind?: string; winner?: string } | undefined;
     if (
       state.match &&
@@ -108,7 +130,11 @@ export async function activate(context: vscode.ExtensionContext) {
   const onPrompt = () => {
     if (!bridge) return;
     try {
-      const raw = JSON.parse(readFileSync(triggerPath, "utf8")) as { at?: number; game?: string };
+      const raw = JSON.parse(readFileSync(triggerPath, "utf8")) as {
+        at?: number;
+        game?: string;
+        room?: string;
+      };
       if (!raw.at || raw.at <= lastTrigger) return;
       if (!raw.game || !(GAME_IDS as readonly string[]).includes(raw.game)) return;
       lastTrigger = raw.at;
@@ -120,8 +146,14 @@ export async function activate(context: vscode.ExtensionContext) {
         const match = bridge.state.match;
         if (!match || match.status === "finished") bridge.next();
       }
+      if (game === "snakes") {
+        const room = raw.room?.trim() || "OPEN";
+        bridge.snakeJoin(room);
+        vscode.window.setStatusBarMessage(`Session: snakes · room ${room.toUpperCase()}`, 4000);
+      } else {
+        vscode.window.setStatusBarMessage(`Session: ${game} from your prompt`, 3000);
+      }
       panel.deal(game);
-      vscode.window.setStatusBarMessage(`Session: ${game} from your prompt`, 3000);
     } catch {
       /* trigger file not written yet */
     }

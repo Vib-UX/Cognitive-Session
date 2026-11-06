@@ -49,6 +49,8 @@ export interface ChessState {
   status: "pending_deposit" | "active" | "finished";
   result?: GameResult;
   stakeWei?: string;
+  /** VRF word that chose the colors. Absent when the match was not a CRE draw. */
+  drawWord?: string;
   lockTx?: string;
   ccipMessageId?: string;
   payoutTx?: string;
@@ -149,7 +151,7 @@ export type ServerMessage =
   | { type: "challenge"; challenge: ChallengeInfo }
   | { type: "challenge_resolved"; challengeId: string; accepted: boolean; match?: ChessState }
   | { type: "match"; match: ChessState }
-  | { type: "queue"; seeking: boolean; waiting: number }
+  | { type: "queue"; seeking: boolean; waiting: number; drawing?: boolean }
   | { type: "error"; message: string; scope?: "reward" }
   | { type: "reward"; txHash: string; chainId: number; amount: string; chainName: string }
   | {

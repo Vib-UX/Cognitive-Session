@@ -1,7 +1,7 @@
 {
   "name": "session-ide",
   "displayName": "Session",
-  "description": "Connect coding sessions and play chess in a Cursor/VS Code sidebar and board tab",
+    "description": "Connect coding sessions and play chess or snakes in a Cursor/VS Code sidebar and board tab",
   "version": "0.1.0",
   "publisher": "session",
   "private": true,
@@ -42,7 +42,7 @@
       },
       {
         "command": "session.openBoard",
-        "title": "Session: Open chess board",
+        "title": "Session: Open board",
         "icon": "$(symbol-misc)"
       },
       {

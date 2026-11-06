@@ -3,6 +3,7 @@ import type WebSocket from "ws";
 import { syncEntity } from "./arkiv-sync.js";
 import { payReward } from "./treasury.js";
 import { applyMove, applyResign, checkTimeout, createMatch } from "./chess.js";
+import { kickWorkflow, makePairId, whiteIsFirst } from "./draw.js";
 import {
   PUBLIC_SNAKE_ROOM,
   createSnakeMatch,
@@ -33,6 +34,16 @@ interface Conn {
   lastSeen: number;
 }
 
+interface PendingDraw {
+  pairId: `0x${string}`;
+  first: SessionId;
+  second: SessionId;
+  roomCode: string;
+  at: number;
+}
+
+const DRAW_WAIT_MS = 3 * 60 * 1000;
+
 function roomCode(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
@@ -42,6 +53,8 @@ function roomCode(): string {
 }
 
 export class RelayStore {
+  constructor(private readonly options?: { draw?: boolean }) {}
+
   private conns = new Map<WebSocket, Conn>();
   private byId = new Map<SessionId, Conn>();
   private rooms = new Map<string, RoomInfo>();
@@ -51,6 +64,7 @@ export class RelayStore {
   private snakeByRoom = new Map<string, string>();
   /** FIFO of sessions that pressed Next and are waiting for a partner. */
   private queue: SessionId[] = [];
+  private pending = new Map<`0x${string}`, PendingDraw>();
   challenges = new Map<string, ChallengeInfo>();
 
   add(ws: WebSocket): void {
@@ -62,6 +76,7 @@ export class RelayStore {
     if (!conn) return;
     if (conn.identity) {
       this.queue = this.queue.filter((id) => id !== conn.identity!.id);
+      this.cancelDraw(conn.identity.id, "Your partner left before the draw.");
       this.dropSnakePlayer(conn.identity.id);
       this.byId.delete(conn.identity.id);
       if (conn.roomCode) this.leaveRoom(conn);
@@ -272,7 +287,6 @@ export class RelayStore {
     const match = this.snakes.get(matchId);
     if (!match) throw new Error("Snake match not found");
     setSnakeHeading(match, conn.identity.id, dir, boost);
-    this.broadcastSnake(match);
   }
 
   private onSnakeLeave(conn: Conn): void {
@@ -329,13 +343,13 @@ export class RelayStore {
   }
 
   private broadcastSnake(match: SnakeState): void {
-    const payload: ServerMessage = { type: "snake", match };
+    const raw = JSON.stringify({ type: "snake", match } satisfies ServerMessage);
     const ids = new Set<SessionId>(match.players.map((player) => player.id));
     const room = this.rooms.get(match.roomCode);
     if (room) for (const id of room.members) ids.add(id);
     for (const id of ids) {
       const conn = this.byId.get(id);
-      if (conn) this.send(conn.ws, payload);
+      if (conn && conn.ws.readyState === conn.ws.OPEN) conn.ws.send(raw);
     }
   }
 
@@ -493,6 +507,7 @@ export class RelayStore {
     if (!conn.identity) throw new Error("Say hello first");
     const me = conn.identity.id;
     this.queue = this.queue.filter((id) => id !== me);
+    this.cancelDraw(me, "");
 
     const active = this.activeMatch(conn);
     let avoid: SessionId | null = null;
@@ -511,6 +526,21 @@ export class RelayStore {
       const partner = this.byId.get(partnerId);
       if (!partner?.identity) throw new Error("Peer offline");
       const code = this.ensureSharedRoom(conn, partner);
+      if (this.drawsOn()) {
+        const pairId = makePairId(partnerId, me);
+        this.pending.set(pairId, {
+          pairId,
+          first: partnerId,
+          second: me,
+          roomCode: code,
+          at: Date.now(),
+        });
+        kickWorkflow({ pairId, first: partnerId, second: me });
+        this.sendQueue(conn);
+        this.sendQueue(partner);
+        this.broadcastPeers();
+        return;
+      }
       const match = createMatch(code, me, partnerId, "0");
       this.matches.set(match.matchId, match);
       const room = this.rooms.get(code);
@@ -546,13 +576,86 @@ export class RelayStore {
     return this.queue.filter((id) => id !== me).length;
   }
 
+  private drawsOn(): boolean {
+    return this.options?.draw ?? Boolean(process.env.SESSION_MATCH_DRAW_ADDRESS?.trim());
+  }
+
+  private drawingFor(id: SessionId): boolean {
+    for (const draw of this.pending.values()) {
+      if (draw.first === id || draw.second === id) return true;
+    }
+    return false;
+  }
+
   private sendQueue(conn: Conn): void {
     if (!conn.identity) return;
+    const drawing = this.drawingFor(conn.identity.id);
     this.send(conn.ws, {
       type: "queue",
-      seeking: this.queue.includes(conn.identity.id),
+      seeking: this.queue.includes(conn.identity.id) || drawing,
       waiting: this.othersWaiting(conn.identity.id),
+      drawing,
     });
+  }
+
+  pendingPair(): `0x${string}` | null {
+    const first = this.pending.values().next().value as PendingDraw | undefined;
+    return first?.pairId ?? null;
+  }
+
+  /** The Base watcher calls this when DrawFulfilled is visible for a held pair. */
+  applyDraw(pairId: `0x${string}`, word: bigint): ChessState | null {
+    const held = this.pending.get(pairId);
+    if (!held) return null;
+    this.pending.delete(pairId);
+    const first = this.byId.get(held.first);
+    const second = this.byId.get(held.second);
+    if (!first?.identity || !second?.identity) return null;
+    const match = createMatch(held.roomCode, held.first, held.second, "0", {
+      whiteIsA: whiteIsFirst(word),
+      word: word.toString(),
+    });
+    this.matches.set(match.matchId, match);
+    const room = this.rooms.get(held.roomCode);
+    if (room) {
+      room.matchId = match.matchId;
+      for (const id of room.members) {
+        const member = this.byId.get(id);
+        if (member) this.send(member.ws, { type: "room", room });
+      }
+    }
+    this.broadcastMatch(match);
+    this.sendQueue(first);
+    this.sendQueue(second);
+    this.broadcastPeers();
+    return match;
+  }
+
+  private cancelDraw(id: SessionId, message: string): void {
+    for (const [pairId, draw] of this.pending) {
+      if (draw.first !== id && draw.second !== id) continue;
+      this.pending.delete(pairId);
+      const otherId = draw.first === id ? draw.second : draw.first;
+      const other = this.byId.get(otherId);
+      if (other && message) this.send(other.ws, { type: "error", message });
+      if (other && !this.queue.includes(otherId)) this.queue.push(otherId);
+      if (other) this.sendQueue(other);
+    }
+  }
+
+  private sweepDraws(): void {
+    const now = Date.now();
+    for (const [pairId, draw] of this.pending) {
+      if (now - draw.at < DRAW_WAIT_MS) continue;
+      this.pending.delete(pairId);
+      const message = "The draw did not arrive. Press Next again.";
+      for (const id of [draw.first, draw.second]) {
+        const conn = this.byId.get(id);
+        if (!conn) continue;
+        this.send(conn.ws, { type: "error", message });
+        this.sendQueue(conn);
+      }
+    }
   }
 
   private onResign(conn: Conn, matchId: string): void {
@@ -695,6 +798,7 @@ export class RelayStore {
       if (chal.expiresAt < now) this.challenges.delete(id);
     }
     this.sweepTimeouts();
+    this.sweepDraws();
   }
 
   private sweepTimeouts(): void {

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 
-export const GAME_IDS = ["chess", "sudoku", "maths", "mate"] as const;
+export const GAME_IDS = ["chess", "snakes", "sudoku", "maths", "mate"] as const;
 export type GameId = (typeof GAME_IDS)[number];
 
 export const EVM_CHAINS = [

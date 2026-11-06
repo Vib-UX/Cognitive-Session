@@ -31,77 +31,138 @@ function keyDir(key: string): SnakeDir | null {
   return null;
 }
 
-function drawArena(canvas: HTMLCanvasElement, match: SnakeState, selfId: string | null) {
+type Point = { x: number; y: number };
+
+function opposite(dir: SnakeDir): SnakeDir {
+  if (dir === "up") return "down";
+  if (dir === "down") return "up";
+  if (dir === "left") return "right";
+  return "left";
+}
+
+function alignPose(prev: Point[] | undefined, next: Point[]): Point[] {
+  if (!prev || prev.length === 0) return next.map((cell) => ({ x: cell.x, y: cell.y }));
+  const grown = next.length - prev.length;
+  if (grown === 0) return prev;
+  if (grown > 0 && grown <= 2) {
+    const pad = Array.from({ length: grown }, () => prev[0]!);
+    return pad.concat(prev).slice(0, next.length);
+  }
+  if (grown < 0 && grown >= -2) return prev.slice(0, next.length);
+  return next.map((cell) => ({ x: cell.x, y: cell.y }));
+}
+
+function easePose(prev: Point[] | undefined, next: Point[], dt: number): Point[] {
+  const aligned = alignPose(prev, next);
+  const slow = 1 - Math.exp(-dt / 36);
+  const fast = 1 - Math.exp(-dt / 16);
+  return next.map((cell, index) => {
+    const cur = aligned[index];
+    if (!cur) return { x: cell.x, y: cell.y };
+    const dx = cell.x - cur.x;
+    const dy = cell.y - cur.y;
+    const dist = dx * dx + dy * dy;
+    if (dist > 64) return { x: cell.x, y: cell.y };
+    const k = dist > 6.25 ? fast : slow;
+    return { x: cur.x + dx * k, y: cur.y + dy * k };
+  });
+}
+
+let gridCache: { key: string; canvas: HTMLCanvasElement } | null = null;
+
+function gridLayer(css: number, width: number, height: number): HTMLCanvasElement {
+  const key = `${css}x${width}x${height}`;
+  if (gridCache?.key === key) return gridCache.canvas;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.floor(css);
+  canvas.height = Math.floor(css);
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const step = css / width;
+    ctx.strokeStyle = "rgba(255,255,255,0.045)";
+    ctx.beginPath();
+    for (let i = 1; i < width; i++) {
+      const x = Math.round(i * step) + 0.5;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, css);
+    }
+    for (let i = 1; i < height; i++) {
+      const y = Math.round(i * step) + 0.5;
+      ctx.moveTo(0, y);
+      ctx.lineTo(css, y);
+    }
+    ctx.stroke();
+  }
+  gridCache = { key, canvas };
+  return canvas;
+}
+
+function drawArena(
+  canvas: HTMLCanvasElement,
+  match: SnakeState,
+  poses: Map<string, Point[]>,
+  selfId: string | null,
+  facing: SnakeDir | null,
+) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const css = canvas.clientWidth;
   if (css < 10) return;
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
   const px = Math.floor(css * dpr);
   if (canvas.width !== px || canvas.height !== px) {
     canvas.width = px;
     canvas.height = px;
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const cell = css / match.width;
+  ctx.clearRect(0, 0, css, css);
   ctx.fillStyle = "#070b10";
   ctx.fillRect(0, 0, css, css);
-  ctx.strokeStyle = "rgba(255,255,255,0.04)";
-  ctx.lineWidth = 1;
-  for (let i = 1; i < match.width; i++) {
-    ctx.beginPath();
-    ctx.moveTo(i * cell + 0.5, 0);
-    ctx.lineTo(i * cell + 0.5, css);
-    ctx.stroke();
-  }
-  for (let i = 1; i < match.height; i++) {
-    ctx.beginPath();
-    ctx.moveTo(0, i * cell + 0.5);
-    ctx.lineTo(css, i * cell + 0.5);
-    ctx.stroke();
-  }
+  ctx.drawImage(gridLayer(css, match.width, match.height), 0, 0, css, css);
+  const cell = css / match.width;
 
   for (const pellet of match.pellets) {
-    const radius = (pellet.value > 1 ? 0.3 : 0.16) * cell;
-    ctx.save();
-    ctx.shadowColor = pellet.value > 1 ? "#fde68a" : "#fbbf24";
-    ctx.shadowBlur = 14;
     ctx.fillStyle = pellet.value > 1 ? "#fde68a" : "#fbbf24";
     ctx.beginPath();
-    ctx.arc(pellet.x * cell + cell / 2, pellet.y * cell + cell / 2, radius, 0, Math.PI * 2);
+    ctx.arc(
+      pellet.x * cell + cell / 2,
+      pellet.y * cell + cell / 2,
+      (pellet.value > 1 ? 0.28 : 0.16) * cell,
+      0,
+      Math.PI * 2,
+    );
     ctx.fill();
-    ctx.restore();
   }
 
   for (const player of match.players) {
-    player.body.forEach((seg, index) => {
-      const head = index === 0;
-      ctx.save();
-      ctx.globalAlpha = player.alive ? 1 : 0.4;
-      ctx.fillStyle = player.color;
-      if (head) {
-        ctx.shadowColor = player.color;
-        ctx.shadowBlur = player.boost ? 18 : 8;
-      }
+    const body = poses.get(player.id);
+    if (!body || body.length === 0) continue;
+    ctx.globalAlpha = player.alive ? 1 : 0.4;
+    ctx.strokeStyle = player.color;
+    ctx.fillStyle = player.color;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = cell * 0.72;
+    if (body.length > 1) {
       ctx.beginPath();
-      ctx.arc(
-        seg.x * cell + cell / 2,
-        seg.y * cell + cell / 2,
-        (head ? 0.46 : 0.36) * cell,
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
-      ctx.restore();
-    });
-
-    const head = player.body[0];
-    if (!head) continue;
+      ctx.moveTo(body[0]!.x * cell + cell / 2, body[0]!.y * cell + cell / 2);
+      for (let i = 1; i < body.length; i++) {
+        const seg = body[i]!;
+        ctx.lineTo(seg.x * cell + cell / 2, seg.y * cell + cell / 2);
+      }
+      ctx.stroke();
+    }
+    const head = body[0]!;
     const cx = head.x * cell + cell / 2;
     const cy = head.y * cell + cell / 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, cell * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+    const dir =
+      player.id === selfId && facing && facing !== opposite(player.dir) ? facing : player.dir;
     if (player.alive) {
-      const ox = player.dir === "left" ? -1 : player.dir === "right" ? 1 : 0;
-      const oy = player.dir === "up" ? -1 : player.dir === "down" ? 1 : 0;
+      const ox = dir === "left" ? -1 : dir === "right" ? 1 : 0;
+      const oy = dir === "up" ? -1 : dir === "down" ? 1 : 0;
       const px = -oy;
       const py = ox;
       ctx.fillStyle = "#071018";
@@ -117,14 +178,21 @@ function drawArena(canvas: HTMLCanvasElement, match: SnakeState, selfId: string 
         ctx.fill();
       }
     }
-    ctx.font = `600 ${Math.max(11, cell * 0.72)}px "IBM Plex Sans", sans-serif`;
+    ctx.globalAlpha = 1;
+    if (cell < 8) continue;
+    ctx.font = `600 ${Math.max(11, cell * 0.7)}px "IBM Plex Sans", sans-serif`;
     ctx.textAlign = "center";
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(0,0,0,0.65)";
-    ctx.strokeText(player.name, cx, cy - cell * 0.72);
     ctx.fillStyle = player.id === selfId ? "#ffffff" : "rgba(232,238,246,0.9)";
-    ctx.fillText(player.name, cx, cy - cell * 0.72);
+    ctx.fillText(player.name, cx, cy - cell * 0.7);
   }
+}
+
+function viewSig(match: SnakeState): string {
+  return [
+    match.tick,
+    match.status,
+    match.players.map((player) => `${player.id}:${player.score}:${player.alive ? 1 : 0}`).join(","),
+  ].join("|");
 }
 
 export function SnakeArena() {
@@ -136,7 +204,6 @@ export function SnakeArena() {
   const [myId, setMyId] = useState<SessionId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [box, setBox] = useState(0);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -144,11 +211,12 @@ export function SnakeArena() {
   const matchRef = useRef<SnakeState | null>(null);
   const myIdRef = useRef<SessionId | null>(null);
   const dirRef = useRef<SnakeDir | null>(null);
+  const facingRef = useRef<SnakeDir | null>(null);
   const boostRef = useRef(false);
-
-  useEffect(() => {
-    matchRef.current = match;
-  }, [match]);
+  const pressedRef = useRef<SnakeDir[]>([]);
+  const posesRef = useRef<Map<string, Point[]>>(new Map());
+  const sigRef = useRef("");
+  const sentSteer = useRef("");
 
   useEffect(() => {
     if (match?.status !== "active") return;
@@ -157,19 +225,32 @@ export function SnakeArena() {
   }, [match?.status]);
 
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setBox(el.clientWidth));
-    ro.observe(el);
-    setBox(el.clientWidth);
-    return () => ro.disconnect();
+    if (!playing) return;
+    let frame = 0;
+    let last = 0;
+    const loop = (nowMs: number) => {
+      frame = window.requestAnimationFrame(loop);
+      const canvas = canvasRef.current;
+      const current = matchRef.current;
+      if (!canvas || !current) return;
+      const dt = last ? Math.min(48, nowMs - last) : 16;
+      last = nowMs;
+      const poses = posesRef.current;
+      const seen = new Set<string>();
+      for (const player of current.players) {
+        seen.add(player.id);
+        if (player.body.length === 0) {
+          poses.delete(player.id);
+          continue;
+        }
+        poses.set(player.id, easePose(poses.get(player.id), player.body, dt));
+      }
+      for (const id of [...poses.keys()]) if (!seen.has(id)) poses.delete(id);
+      drawArena(canvas, current, poses, myIdRef.current, facingRef.current);
+    };
+    frame = window.requestAnimationFrame(loop);
+    return () => window.cancelAnimationFrame(frame);
   }, [playing]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !match) return;
-    drawArena(canvas, match, myId);
-  }, [match, myId, box]);
 
   function closeSocket() {
     const cur = live.current;
@@ -180,14 +261,29 @@ export function SnakeArena() {
     live.current = null;
   }
 
+  function rememberKey(dir: SnakeDir, down: boolean): SnakeDir | null {
+    const list = pressedRef.current;
+    const at = list.indexOf(dir);
+    if (down) {
+      if (at >= 0) list.splice(at, 1);
+      list.push(dir);
+    } else if (at >= 0) list.splice(at, 1);
+    return list[list.length - 1] ?? null;
+  }
+
   function sendSteer(dir: SnakeDir | null, boost: boolean) {
+    const heading = dir ?? dirRef.current;
+    if (heading) {
+      dirRef.current = heading;
+      facingRef.current = heading;
+    }
+    boostRef.current = boost;
     const ws = live.current?.ws;
     const current = matchRef.current;
-    const heading =
-      dir ?? current?.players.find((player) => player.id === myIdRef.current)?.dir ?? null;
     if (!ws || ws.readyState !== WebSocket.OPEN || !current || !heading) return;
-    if (dir) dirRef.current = dir;
-    boostRef.current = boost;
+    const stamp = `${current.matchId}:${heading}:${boost ? 1 : 0}`;
+    if (sentSteer.current === stamp) return;
+    sentSteer.current = stamp;
     ws.send(
       JSON.stringify({
         type: "snake_steer",
@@ -205,6 +301,7 @@ export function SnakeArena() {
       if (target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
         return;
       }
+      if (event.repeat) return;
       if (event.code === "Space") {
         event.preventDefault();
         sendSteer(dirRef.current, true);
@@ -213,11 +310,18 @@ export function SnakeArena() {
       const dir = keyDir(event.key);
       if (!dir) return;
       event.preventDefault();
-      sendSteer(dir, boostRef.current);
+      const next = rememberKey(dir, true);
+      if (next) sendSteer(next, boostRef.current);
     };
     const up = (event: KeyboardEvent) => {
-      if (event.code !== "Space") return;
-      sendSteer(dirRef.current, false);
+      if (event.code === "Space") {
+        sendSteer(dirRef.current, false);
+        return;
+      }
+      const dir = keyDir(event.key);
+      if (!dir) return;
+      const next = rememberKey(dir, false);
+      if (next) sendSteer(next, boostRef.current);
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
@@ -234,7 +338,12 @@ export function SnakeArena() {
     setMatch(null);
     setRoomCode(null);
     dirRef.current = null;
+    facingRef.current = null;
     boostRef.current = false;
+    pressedRef.current = [];
+    posesRef.current = new Map();
+    sigRef.current = "";
+    sentSteer.current = "";
     const id = newId();
     myIdRef.current = id;
     setMyId(id);
@@ -269,7 +378,13 @@ export function SnakeArena() {
       } else if (msg.type === "room" && msg.room) {
         setRoomCode(msg.room.code);
       } else if (msg.type === "snake" && msg.match) {
-        setMatch(msg.match);
+        matchRef.current = msg.match;
+        const sig = viewSig(msg.match);
+        if (sig !== sigRef.current) {
+          sigRef.current = sig;
+          setMatch(msg.match);
+        }
+        if (dirRef.current) sendSteer(dirRef.current, boostRef.current);
       } else if (msg.type === "error" && msg.message) {
         setError(msg.message);
       }

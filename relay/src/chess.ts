@@ -9,8 +9,10 @@ export function createMatch(
   a: SessionId,
   b: SessionId,
   stakeWei = "0",
+  opening?: { whiteIsA: boolean; word: string },
 ): ChessState {
-  const white = Math.random() < 0.5 ? a : b;
+  const whiteIsA = opening ? opening.whiteIsA : Math.random() < 0.5;
+  const white = whiteIsA ? a : b;
   const black = white === a ? b : a;
   const chess = new Chess();
   const needsDeposit = stakeWei !== "0";
@@ -25,6 +27,7 @@ export function createMatch(
     lastMoveAt: Date.now(),
     status: needsDeposit ? "pending_deposit" : "active",
     stakeWei,
+    drawWord: opening?.word,
   };
 }
 

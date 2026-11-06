@@ -12,10 +12,12 @@ import type {
   ServerMessage,
   SessionIdentity,
   SessionId,
+  SnakeDir,
+  SnakeState,
   UiState,
 } from "./types";
 
-type Listener = (state: UiState) => void;
+type Listener = (state: UiState, kind?: "snake") => void;
 
 /**
  * One identity per Cursor window (extension host), not one global file.
@@ -59,10 +61,12 @@ export class RelayBridge {
   room: RoomInfo | null = null;
   pings: PingMessage[] = [];
   match: ChessState | null = null;
+  snake: SnakeState | null = null;
   challenges: ChallengeInfo[] = [];
   error: string | null = null;
   seeking = false;
   waiting = 0;
+  drawing = false;
 
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connecting = false;
@@ -83,10 +87,12 @@ export class RelayBridge {
       room: this.room,
       pings: this.pings,
       match: this.match,
+      snake: this.snake,
       challenges: this.challenges,
       error: this.error,
       seeking: this.seeking,
       waiting: this.waiting,
+      drawing: this.drawing,
     };
   }
 
@@ -96,9 +102,9 @@ export class RelayBridge {
     return () => this.listeners.delete(fn);
   }
 
-  private emit() {
+  private emit(kind?: "snake") {
     const s = this.state;
-    for (const fn of this.listeners) fn(s);
+    for (const fn of this.listeners) fn(s, kind);
   }
 
   async connect(): Promise<void> {
@@ -227,18 +233,28 @@ export class RelayBridge {
         break;
       case "match":
         this.match = msg.match;
-        if (msg.match.status !== "finished") this.seeking = false;
+        if (msg.match.status !== "finished") {
+          this.seeking = false;
+          this.drawing = false;
+        }
         break;
+      case "snake":
+        this.snake = msg.match;
+        this.emit("snake");
+        return;
       case "queue":
         this.seeking = msg.seeking;
         this.waiting = msg.waiting;
+        this.drawing = Boolean(msg.drawing);
         break;
       case "poll_state":
         this.peers = msg.peers;
         this.room = msg.room;
         this.pings = msg.pings;
         this.match = msg.match;
+        this.snake = msg.snake ?? null;
         this.challenges = msg.challenges;
+        if (msg.match && msg.match.status !== "finished") this.drawing = false;
         break;
       case "error":
         this.error = msg.message;
@@ -316,6 +332,29 @@ export class RelayBridge {
 
   poll() {
     this.send({ type: "poll" });
+  }
+
+  /**
+   * Join a snake room. A prompt that selects snakes passes OPEN, the shared room.
+   * With no code, stay in the current room, or enter OPEN if there isn't one.
+   */
+  snakeJoin(code?: string) {
+    const room = code?.trim().toUpperCase();
+    const mine = this.snake?.players.find((player) => player.id === this.me.id);
+    const already =
+      mine?.connected && this.snake && this.snake.status !== "finished" && (!room || this.snake.roomCode === room);
+    if (already) return;
+    this.error = null;
+    this.send(room ? { type: "snake_join", code: room } : { type: "snake_join" });
+  }
+
+  snakeSteer(dir: SnakeDir, boost = false) {
+    if (!this.snake) return;
+    this.send({ type: "snake_steer", matchId: this.snake.matchId, dir, boost });
+  }
+
+  snakeLeave() {
+    this.send({ type: "snake_leave" });
   }
 
   setPlayer(wallet: `0x${string}`, chainId: number) {

@@ -32,7 +32,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.html(webviewView.webview);
 
     this.unsub?.();
-    this.unsub = this.bridge.onChange((state) => this.postState(state));
+    this.unsub = this.bridge.onChange((state, kind) => {
+      if (kind === "snake") return;
+      this.postState(state);
+    });
     this.unsubCredits?.();
     this.unsubCredits = this.credits.onChange(() => this.postCredits());
 
@@ -67,6 +70,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "openBoard":
           this.openBoard();
+          break;
+        case "playSnakes":
+          this.bridge.snakeJoin(typeof msg.code === "string" && msg.code.trim() ? msg.code : "OPEN");
+          this.openBoard("snakes");
           break;
         case "refresh":
           this.bridge.poll();
@@ -272,6 +279,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <h2 style="margin-top:0">Play</h2>
     <div class="empty" id="onboardLead">Pick what you want while you code.</div>
     <label class="choice"><input type="checkbox" data-game="chess" checked /> Chess</label>
+    <label class="choice"><input type="checkbox" data-game="snakes" checked /> Snakes</label>
     <label class="choice"><input type="checkbox" data-game="sudoku" /> Sudoku</label>
     <label class="choice"><input type="checkbox" data-game="maths" /> Maths</label>
     <label class="choice"><input type="checkbox" data-game="mate" /> Mate in 1</label>
@@ -289,7 +297,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <option value="137">Polygon</option>
     </select>
     <div class="err" id="walletErr"></div>
-    <div class="empty" id="gamesHint">Prompt the agent to open the next puzzle. Multiplayer chess pairs with whoever is waiting.</div>
+    <div class="empty" id="gamesHint">Prompt the agent to open the next puzzle. Snakes joins the shared arena. Multiplayer chess pairs with whoever is waiting.</div>
     <div class="mono" id="walletLine"></div>
     <button id="savePrefs">Continue</button>
   </div>
@@ -303,6 +311,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <button class="next" id="claim" disabled>Claim</button>
     <div class="ledger" id="ledger"></div>
   </div>
+  <button class="next" id="playSnakes">Play snakes</button>
   <button class="next" id="next">Next</button>
   <div class="empty" id="nextHint" style="margin-top:6px">Pairs you with whoever is already waiting. No room.</div>
 
@@ -341,6 +350,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     $('connect').onclick = () => vscode.postMessage({ type: 'connect' });
     $('refresh').onclick = () => vscode.postMessage({ type: 'refresh' });
     $('openBoard').onclick = () => vscode.postMessage({ type: 'openBoard' });
+    $('playSnakes').onclick = () => vscode.postMessage({ type: 'playSnakes' });
     $('createRoom').onclick = () => vscode.postMessage({ type: 'createRoom' });
     $('joinRoom').onclick = () => vscode.postMessage({ type: 'joinRoom', code: $('roomCode').value });
     $('leaveRoom').onclick = () => vscode.postMessage({ type: 'leaveRoom' });
@@ -439,15 +449,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       $('dot').className = 'dot' + (s.connected ? ' on' : '');
       $('statusText').textContent = !s.connected
         ? 'Disconnected'
-        : s.seeking
-          ? 'Waiting for the next person'
-          : (s.waiting > 0 ? 'Connected · ' + s.waiting + ' waiting' : 'Connected to relay');
+        : s.drawing
+          ? 'Drawing the opening on Base'
+          : s.seeking
+            ? 'Waiting for the next person'
+            : (s.waiting > 0 ? 'Connected · ' + s.waiting + ' waiting' : 'Connected to relay');
       if (!chessMulti()) {
         $('next').textContent = 'Play';
         $('nextHint').textContent = 'Opens the puzzles you picked. Turn on multiplayer to pair a chess game.';
       } else {
-        $('next').textContent = s.seeking ? 'Waiting…' : 'Next';
-        $('nextHint').textContent = s.seeking
+        $('next').textContent = s.drawing ? 'Drawing…' : (s.seeking ? 'Waiting…' : 'Next');
+        $('nextHint').textContent = s.drawing
+          ? 'Paired. Chainlink VRF on Base is choosing who plays white.'
+          : s.seeking
           ? 'You are in the queue. The next person who hits Next joins you.'
           : (s.waiting > 0
             ? 'Someone is waiting. Next opens a game with them.'
