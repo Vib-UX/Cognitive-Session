@@ -1,6 +1,6 @@
 import { Mark } from "./Mark";
 
-const VSIX = "/session-ide-0.1.0.vsix";
+const VSIX = "/session-ide-0.1.1.vsix";
 
 export function Landing() {
   return (
@@ -29,7 +29,7 @@ export function Landing() {
         <a className="primary" href={VSIX}>
           Download for Cursor
         </a>
-        <p className="hint">Version 0.1.0. A .vsix file. Cursor and VS Code.</p>
+        <p className="hint">Version 0.1.1. A .vsix file. Cursor and VS Code.</p>
       </div>
 
       <section className="install">
