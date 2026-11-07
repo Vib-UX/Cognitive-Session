@@ -10,7 +10,7 @@ import {
   type TransactionReceipt,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { evmChain, treasuryHomes, type TreasuryHome } from "./chains.js";
+import { evmChain, treasuryHome, treasuryHomes, type TreasuryHome } from "./chains.js";
 
 /** CCIP chain selectors. Base pays in place; the others are CCIP 2.0 lanes from Base. */
 export const MAINNET_LANES = {
@@ -160,6 +160,23 @@ function messageIdFrom(receipt: TransactionReceipt, treasury: Address): string |
   return undefined;
 }
 
+/** Send the stake from the loser's treasury to the winner on the other chain. The message id is this transfer, not an older one. */
+export async function sendStake(input: {
+  fromChainId: number;
+  toChainId: number;
+  wallet: string;
+  amount: bigint;
+}): Promise<{ txHash: Hex; messageId?: string }> {
+  if (input.fromChainId === input.toChainId) throw new Error("A same-chain stake is not a CCIP send");
+  if (!treasuryConfigured()) throw new Error("Treasury is not configured on the relay");
+  if (!isAddress(input.wallet)) throw new Error("Wallet is not an address");
+  const source = treasuryHome(input.fromChainId);
+  const dest = laneForChain(input.toChainId);
+  if (!source || !dest) throw new Error("That chain cannot send the stake");
+  const paid = await writeReward(source, dest.selector, input.wallet, input.amount);
+  return { txHash: paid.txHash, messageId: paid.messageId };
+}
+
 export async function payReward(input: {
   wallet: string;
   chainId: number;
@@ -185,7 +202,23 @@ export async function payReward(input: {
     throw new Error("The treasuries do not hold enough USDC on one chain to pay this claim.");
   }
 
-  const release = reserve(input.wallet, input.amount);
+  const paid = await writeReward(source, lane.selector, input.wallet, input.amount);
+  return {
+    txHash: paid.txHash,
+    chainId: input.chainId,
+    amount: input.amount.toString(),
+    chainName: lane.name,
+    messageId: paid.messageId,
+  };
+}
+
+async function writeReward(
+  source: TreasuryHome,
+  destSelector: bigint,
+  wallet: string,
+  amount: bigint,
+): Promise<{ txHash: Hex; messageId?: string }> {
+  const release = reserve(wallet, amount);
   try {
     const rawKey = process.env.TREASURY_PRIVATE_KEY!.trim();
     const account = privateKeyToAccount((rawKey.startsWith("0x") ? rawKey : `0x${rawKey}`) as Hex);
@@ -194,18 +227,18 @@ export async function payReward(input: {
     const publicClient = createPublicClient({ chain, transport });
     const walletClient = createWalletClient({ account, chain, transport });
     const extraArgs = extraArgsV3();
-    const recipient = input.wallet as Address;
+    const recipient = wallet as Address;
     const fee = await publicClient.readContract({
       address: source.address,
       abi: TREASURY_ABI,
       functionName: "quote",
-      args: [lane.selector, recipient, input.amount, extraArgs],
+      args: [destSelector, recipient, amount, extraArgs],
     });
     const txHash = await walletClient.writeContract({
       address: source.address,
       abi: TREASURY_ABI,
       functionName: "sendReward",
-      args: [lane.selector, recipient, input.amount, extraArgs],
+      args: [destSelector, recipient, amount, extraArgs],
       value: fee,
     });
     let messageId: string | undefined;
@@ -215,13 +248,7 @@ export async function payReward(input: {
     } catch {
       /* the send is already submitted; the message id can arrive later */
     }
-    return {
-      txHash,
-      chainId: input.chainId,
-      amount: input.amount.toString(),
-      chainName: lane.name,
-      messageId,
-    };
+    return { txHash, messageId };
   } catch (err) {
     release();
     throw err;

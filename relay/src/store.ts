@@ -9,10 +9,11 @@ import {
   STAKE_USDC,
   chainLabel,
   formatUsdc,
+  ccipHref,
   payoutReceipt,
   stakeChain,
-  transferHref,
   transferLine,
+  txHref,
 } from "./bank.js";
 import { treasuryHome } from "./chains.js";
 import { payReward } from "./treasury.js";
@@ -93,6 +94,13 @@ function roomCode(): string {
   return out;
 }
 
+export type StakeSend = (input: {
+  fromChainId: number;
+  toChainId: number;
+  wallet: string;
+  amount: bigint;
+}) => Promise<{ txHash: string; messageId?: string }>;
+
 export class RelayStore {
   private readonly bank: PlayBank;
   private readonly transfers = new Map<SessionId, StakeTransfer>();
@@ -105,6 +113,8 @@ export class RelayStore {
       draw?: boolean;
       bank?: PlayBank;
       requireDeposit?: boolean;
+      /** Submits the cross-chain stake. Absent in tests, so they never attach an old message. */
+      stakeSender?: StakeSend;
     },
   ) {
     this.bank = options?.bank ?? new PlayBank();
@@ -1197,8 +1207,41 @@ export class RelayStore {
         fromChain,
         toChain,
         line: transferLine(you(id), fromChain, toChain),
-        href: transferHref(fromChain, toChain),
+        href: null,
       });
+      const conn = this.byId.get(id);
+      if (conn) this.sendBank(conn);
+    }
+    if (moved && fromId !== toId && winnerWallet) {
+      void this.publishStake(key, fromId, toId, winnerWallet);
+    }
+  }
+
+  /** Submit the stake on CCIP, then replace the pending line with this message. */
+  private async publishStake(key: string, fromId: number, toId: number, wallet: string): Promise<void> {
+    const sender = this.options?.stakeSender;
+    const fromChain = chainLabel(fromId);
+    const toChain = chainLabel(toId);
+    if (!sender) return;
+    try {
+      const paid = await sender({ fromChainId: fromId, toChainId: toId, wallet, amount: STAKE_USDC });
+      const href = ccipHref(paid.messageId) ?? txHref(fromChain, paid.txHash);
+      this.rewriteStake(key, fromChain, toChain, href, "Balance updated. Claim it whenever you want.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "The cross-chain send failed.";
+      this.rewriteStake(key, fromChain, toChain, null, message);
+    }
+  }
+
+  private rewriteStake(key: string, fromChain: string, toChain: string, href: string | null, note: string): void {
+    for (const [id, row] of this.transfers) {
+      if (row.id !== key) continue;
+      this.transfers.set(id, {
+        ...row,
+        href,
+        line: transferLine(row.you, fromChain, toChain, href),
+      });
+      this.notes.set(id, note);
       const conn = this.byId.get(id);
       if (conn) this.sendBank(conn);
     }

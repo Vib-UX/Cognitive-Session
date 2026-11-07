@@ -8,11 +8,16 @@ import { PlayBank } from "./bank.js";
 import { matchDrawAddress, pollDraws } from "./draw.js";
 import { SNAKE_TICK_MS } from "./snake.js";
 import { RelayStore } from "./store.js";
+import { sendStake } from "./treasury.js";
 
 const PORT = Number(process.env.PORT ?? 47831);
 const bankFile = join(process.env.SESSION_DATA_DIR?.trim() || join(homedir(), ".session"), "relay-bank.json");
 
-const store = new RelayStore({ bank: PlayBank.open(bankFile), requireDeposit: true });
+const store = new RelayStore({
+  bank: PlayBank.open(bankFile),
+  requireDeposit: true,
+  stakeSender: (input) => sendStake(input),
+});
 const app = express();
 app.use(cors());
 app.use(express.json());

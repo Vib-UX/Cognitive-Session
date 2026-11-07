@@ -18,10 +18,6 @@ export const STAKE_USDC = 50_000n;
 export const DEPOSIT_USD = "$1.00";
 export const STAKE_USD = "$0.05";
 
-/** Existing Base CCIP message for the cross-chain USDC lane. */
-export const BASE_CCIP_TX_URL =
-  "https://ccip.chain.link/msg/0xffa95e81e2a89a55f2f9352e7930f07c97157646558135c5000d420e81cf915d";
-
 const TRANSFER = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
 
 /** How far back a deposit check looks. Base produces blocks fast enough that a short block count misses a same-day transfer. */
@@ -93,10 +89,12 @@ export function formatUsdc(units: bigint): string {
   return `${negative ? "-" : ""}$${whole}.${frac}`;
 }
 
-/** Claude plays from Optimism. Cursor plays from Base. An explicit chainId wins. */
+/** Claude's stake sits on Optimism. Cursor's stake sits on Base. Any other host uses the chain it set. */
 export function stakeChain(identity?: { host?: string; chainId?: number } | null): number {
+  if (identity?.host === "claude") return 10;
+  if (identity?.host === "cursor") return 8453;
   if (typeof identity?.chainId === "number" && identity.chainId > 0) return identity.chainId;
-  return identity?.host === "claude" ? 10 : 8453;
+  return 8453;
 }
 
 export function chainLabel(chainId?: number): string {
@@ -118,11 +116,6 @@ export function chainLabel(chainId?: number): string {
     default:
       return "chain";
   }
-}
-
-export function transferHref(fromChain: string, toChain: string): string | null {
-  if (fromChain === toChain || (fromChain !== "Base" && toChain !== "Base")) return null;
-  return BASE_CCIP_TX_URL;
 }
 
 const TX_EXPLORER: Record<string, string> = {
@@ -162,15 +155,18 @@ export function payoutReceipt(
   };
 }
 
-export function transferLine(you: "won" | "lost" | "short", fromChain: string, toChain: string): string {
+export function transferLine(
+  you: "won" | "lost" | "short",
+  fromChain: string,
+  toChain: string,
+  href?: string | null,
+): string {
   if (you === "short") return `Deposit ${DEPOSIT_USD} USDC to cover the ${STAKE_USD}.`;
-  const href = transferHref(fromChain, toChain);
-  if (href) {
-    const direction = you === "won"
-      ? `from their ${fromChain} to your ${toChain}`
-      : `from your ${fromChain} to their ${toChain}`;
-    return `CCIP transaction: cross-chain transfer ${direction}. ${href}`;
-  }
+  const direction = you === "won"
+    ? `from their ${fromChain} to your ${toChain}`
+    : `from your ${fromChain} to their ${toChain}`;
+  if (href) return `CCIP transaction: cross-chain transfer ${direction}. ${href}`;
+  if (fromChain !== toChain) return `Sending ${STAKE_USD} ${direction}.`;
   if (you === "won") return `${STAKE_USD} from their ${fromChain} to your ${toChain}.`;
   return `${STAKE_USD} from your ${fromChain} to their ${toChain}.`;
 }

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type WebSocket from "ws";
-import { BASE_CCIP_TX_URL, PlayBank, STAKE_USDC, ccipHref, depositFromBlock, formatUsdc, logRanges, logSpan, payoutReceipt, stakeChain, transferHref, transferLine, txHref } from "./bank.js";
+import { PlayBank, STAKE_USDC, ccipHref, depositFromBlock, formatUsdc, logRanges, logSpan, payoutReceipt, stakeChain, transferLine, txHref } from "./bank.js";
 import { RelayStore } from "./store.js";
 import type { ServerMessage, SessionId } from "./types.js";
 
@@ -89,16 +89,12 @@ test("a dollar formats as $1.00 and a game as $0.05", () => {
   assert.equal(formatUsdc(1_000_000n), "$1.00");
   assert.equal(formatUsdc(STAKE_USDC), "$0.05");
   assert.equal(formatUsdc(1_050_000n), "$1.05");
+  assert.equal(transferLine("won", "Optimism", "Base"), "Sending $0.05 from their Optimism to your Base.");
   assert.equal(
-    transferLine("won", "Optimism", "Base"),
-    `CCIP transaction: cross-chain transfer from their Optimism to your Base. ${BASE_CCIP_TX_URL}`,
+    transferLine("lost", "Optimism", "Base", "https://ccip.chain.link/msg/0xabc"),
+    "CCIP transaction: cross-chain transfer from your Optimism to their Base. https://ccip.chain.link/msg/0xabc",
   );
-  assert.equal(transferHref("Optimism", "Base"), BASE_CCIP_TX_URL);
-  assert.equal(transferHref("Ethereum", "Polygon"), null);
-  assert.equal(
-    transferLine("lost", "Base", "Optimism"),
-    `CCIP transaction: cross-chain transfer from your Base to their Optimism. ${BASE_CCIP_TX_URL}`,
-  );
+  assert.equal(transferLine("lost", "Ethereum", "Polygon"), "Sending $0.05 from your Ethereum to their Polygon.");
 });
 
 test("a send link is the chain transaction, or the CCIP message when the send crosses chains", () => {
@@ -192,10 +188,10 @@ test("flappy moves $0.05 from the loser chain balance to the winner", () => {
   assert.equal(last(ada.sent, "flappy").flappy.balanceUsd, "$1.05");
   assert.equal(last(bob.sent, "flappy").flappy.balanceUsd, "$0.95");
   assert.equal(adaBank.bank.depositUsd, "$1.00");
-  assert.equal(adaBank.bank.transfer?.line, `CCIP transaction: cross-chain transfer from their Optimism to your Base. ${BASE_CCIP_TX_URL}`);
-  assert.equal(adaBank.bank.transfer?.href, BASE_CCIP_TX_URL);
-  assert.equal(bobBank.bank.transfer?.line, `CCIP transaction: cross-chain transfer from your Optimism to their Base. ${BASE_CCIP_TX_URL}`);
-  assert.equal(last(ada.sent, "flappy").flappy.stake, `CCIP transaction: cross-chain transfer from their Optimism to your Base. ${BASE_CCIP_TX_URL}`);
+  assert.equal(adaBank.bank.transfer?.line, "Sending $0.05 from their Optimism to your Base.");
+  assert.equal(adaBank.bank.transfer?.href ?? null, null);
+  assert.equal(bobBank.bank.transfer?.line, "Sending $0.05 from your Optimism to their Base.");
+  assert.equal(last(ada.sent, "flappy").flappy.stake, "Sending $0.05 from their Optimism to your Base.");
 });
 
 test("a game without a deposit asks for $1.00 and leaves balances alone", () => {
@@ -234,11 +230,11 @@ test("chess resign moves $0.05 to the player who stays", () => {
   store.add(bob.ws);
   store.handle(ada.ws, JSON.stringify({
     type: "hello",
-    identity: { id: A, displayName: "ada", host: "cursor", walletAddress: ADA, chainId: 1 },
+    identity: { id: A, displayName: "ada", host: "web", walletAddress: ADA, chainId: 1 },
   }));
   store.handle(bob.ws, JSON.stringify({
     type: "hello",
-    identity: { id: B, displayName: "bob", host: "cursor", walletAddress: BOB, chainId: 137 },
+    identity: { id: B, displayName: "bob", host: "web", walletAddress: BOB, chainId: 137 },
   }));
   store.handle(ada.ws, JSON.stringify({ type: "challenge", to: B, stakeWei: "0" }));
   const challenge = last(bob.sent, "challenge");
@@ -257,7 +253,8 @@ test("chess resign moves $0.05 to the player who stays", () => {
 test("a Claude loss or resign moves $0.05 from Optimism to Base", () => {
   assert.equal(stakeChain({ host: "claude" }), 10);
   assert.equal(stakeChain({ host: "cursor" }), 8453);
-  assert.equal(stakeChain({ host: "claude", chainId: 8453 }), 8453);
+  assert.equal(stakeChain({ host: "claude", chainId: 8453 }), 10);
+  assert.equal(stakeChain({ host: "cursor", chainId: 10 }), 8453);
   const bank = new PlayBank(null, async () => []);
   bank.credit(ADA, ADA_TX, 1_000_000n, 10);
   bank.credit(ADA, BOB_TX, 1_000_000n, 8453);
@@ -282,12 +279,53 @@ test("a Claude loss or resign moves $0.05 from Optimism to Base", () => {
   assert.equal(bank.balanceOf(ADA, 10), 950_000n);
   assert.equal(bank.balanceOf(ADA, 8453), 1_050_000n);
   assert.equal(last(claude.sent, "bank").bank.balanceUsd, "$0.95");
+  assert.equal(last(claude.sent, "bank").bank.transfer?.line, "Sending $0.05 from your Optimism to their Base.");
+  assert.equal(last(claude.sent, "bank").bank.transfer?.href ?? null, null);
+  assert.equal(last(cursor.sent, "bank").bank.balanceUsd, "$1.05");
+});
+
+test("the CCIP link is the stake send from this game", async () => {
+  const bank = new PlayBank(null, async () => []);
+  bank.credit(ADA, ADA_TX, 1_000_000n, 10);
+  bank.credit(BOB, BOB_TX, 1_000_000n, 8453);
+  const messageId = `0x${"cd".repeat(32)}`;
+  const seen: Array<{ fromChainId: number; toChainId: number; wallet: string; amount: bigint }> = [];
+  const store = new RelayStore({
+    bank,
+    stakeSender: async (input) => {
+      seen.push(input);
+      return { txHash: `0x${"ab".repeat(32)}`, messageId };
+    },
+  });
+  const claude = fakeSocket();
+  const cursor = fakeSocket();
+  store.add(claude.ws);
+  store.add(cursor.ws);
+  store.handle(claude.ws, JSON.stringify({
+    type: "hello",
+    identity: { id: A, displayName: "claude", host: "claude", walletAddress: ADA, chainId: 8453 },
+  }));
+  store.handle(cursor.ws, JSON.stringify({
+    type: "hello",
+    identity: { id: B, displayName: "cursor", host: "cursor", walletAddress: BOB, chainId: 10 },
+  }));
+  store.handle(claude.ws, JSON.stringify({ type: "challenge", to: B, stakeWei: "0" }));
+  const challenge = last(cursor.sent, "challenge");
+  store.handle(cursor.ws, JSON.stringify({ type: "respond_challenge", challengeId: challenge.challenge.id, accept: true }));
+  const match = last(claude.sent, "match");
+  store.handle(claude.ws, JSON.stringify({ type: "resign", matchId: match.match.matchId }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]?.fromChainId, 10);
+  assert.equal(seen[0]?.toChainId, 8453);
+  assert.equal(seen[0]?.wallet, BOB);
+  assert.equal(seen[0]?.amount, STAKE_USDC);
+  const href = `https://ccip.chain.link/msg/${messageId}`;
+  assert.equal(last(claude.sent, "bank").bank.transfer?.href, href);
   assert.equal(
     last(claude.sent, "bank").bank.transfer?.line,
-    `CCIP transaction: cross-chain transfer from your Optimism to their Base. ${BASE_CCIP_TX_URL}`,
+    `CCIP transaction: cross-chain transfer from your Optimism to their Base. ${href}`,
   );
-  assert.equal(last(claude.sent, "bank").bank.transfer?.href, BASE_CCIP_TX_URL);
-  assert.equal(last(cursor.sent, "bank").bank.balanceUsd, "$1.05");
 });
 
 test("a rematch starts only after both players ask, and the claimable balance stays", () => {
@@ -301,11 +339,11 @@ test("a rematch starts only after both players ask, and the claimable balance st
   store.add(bob.ws);
   store.handle(ada.ws, JSON.stringify({
     type: "hello",
-    identity: { id: A, displayName: "ada", host: "cursor", walletAddress: ADA, chainId: 1 },
+    identity: { id: A, displayName: "ada", host: "web", walletAddress: ADA, chainId: 1 },
   }));
   store.handle(bob.ws, JSON.stringify({
     type: "hello",
-    identity: { id: B, displayName: "bob", host: "cursor", walletAddress: BOB, chainId: 137 },
+    identity: { id: B, displayName: "bob", host: "web", walletAddress: BOB, chainId: 137 },
   }));
   store.handle(ada.ws, JSON.stringify({ type: "challenge", to: B, stakeWei: "0" }));
   const challenge = last(bob.sent, "challenge");
@@ -336,7 +374,7 @@ test("play stays closed until a Base deposit covers $0.05", () => {
   store.add(ada.ws);
   store.handle(ada.ws, JSON.stringify({
     type: "hello",
-    identity: { id: A, displayName: "ada", host: "claude", walletAddress: ADA, chainId: 1 },
+    identity: { id: A, displayName: "ada", host: "web", walletAddress: ADA, chainId: 1 },
   }));
   assert.equal(last(ada.sent, "bank").bank.canPlay, false);
   store.handle(ada.ws, JSON.stringify({ type: "flappy_join" }));

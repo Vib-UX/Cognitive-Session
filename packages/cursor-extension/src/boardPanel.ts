@@ -569,6 +569,8 @@ export class BoardPanel {
       const transfer = bank && bank.transfer;
       if (transfer && typeof transfer.href === 'string' && transfer.href.indexOf('https://ccip.chain.link/') === 0) {
         rows.push({ label: 'CCIP transaction', href: transfer.href });
+      } else if (transfer && typeof transfer.line === 'string' && transfer.line) {
+        rows.push({ label: transfer.line, href: '' });
       }
       const payout = bank && bank.payout;
       const ccip = payout && typeof payout.ccipHref === 'string' ? payout.ccipHref : '';
@@ -590,14 +592,17 @@ export class BoardPanel {
         block.className = 'tx-row';
         const title = document.createElement('div');
         title.textContent = row.label;
-        const link = document.createElement('a');
-        link.href = row.href;
-        link.textContent = row.href;
-        link.addEventListener('click', (event) => {
-          event.preventDefault();
-          vscode.postMessage({ type: 'openLink', href: row.href });
-        });
-        block.append(title, link);
+        block.append(title);
+        if (row.href) {
+          const link = document.createElement('a');
+          link.href = row.href;
+          link.textContent = row.href;
+          link.addEventListener('click', (event) => {
+            event.preventDefault();
+            vscode.postMessage({ type: 'openLink', href: row.href });
+          });
+          block.append(link);
+        }
         box.append(block);
       });
     }
