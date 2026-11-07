@@ -288,14 +288,14 @@ function identityLine(Text) {
 }
 
 const PAYOUT_CHAINS = [
+  { id: 10, name: "Optimism" },
   { id: 8453, name: "Base" },
   { id: 1, name: "Ethereum" },
   { id: 42161, name: "Arbitrum" },
-  { id: 10, name: "Optimism" },
   { id: 137, name: "Polygon" },
 ];
-const TREASURY = "0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c";
-let payoutChain = 8453;
+const TREASURY = "0x2aa139d40b57560EE8bAa94325cfdc5a7721DE3f";
+let payoutChain = 10;
 let walletDraft = "";
 
 function funded() {
@@ -312,20 +312,20 @@ async function checkDeposit($) {
 function depositBlock($, ui) {
   const { Box, Text, Button, Input } = ui;
   const bank = snap.bank;
-  const known = { 8453: TREASURY, 10: "0x2aa139d40b57560EE8bAa94325cfdc5a7721DE3f", 1: "" };
-  const address = (bank && bank.address) || known[payoutChain] || "This chain has no treasury yet";
+  const known = { 8453: "0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c", 10: TREASURY, 1: "" };
+  const address = known[payoutChain] || (bank && bank.address) || "This chain has no treasury yet";
   const chainName = (PAYOUT_CHAINS.find((item) => item.id === payoutChain) || PAYOUT_CHAINS[0]).name;
   const balance = (bank && bank.balanceUsd) || "$0.00";
   const rows = [
     Text({
       key: "deposit-hint",
-      children: ["Send $1.00 USDC on the chain you pick, to that chain's treasury. Claim pays you there. A chain without a treasury is paid over CCIP."],
+      children: ["Send $1.00 USDC on Optimism to this treasury. Claim pays you on Optimism."],
     }),
     Text({ key: "deposit-address", color: "claude", children: [address] }),
     Text({
       key: "deposit-chain",
       color: "subtle",
-      children: [`Claim pays you on ${chainName}. Deposit the USDC on that chain when it has a treasury. Otherwise deposit on Base or Optimism and the claim is sent over CCIP.`],
+      children: [`This Claude session deposits on ${chainName}. Cursor deposits on Base.`],
     }),
     Text({ key: "deposit-balance", children: [`Balance ${balance}`] }),
   ];

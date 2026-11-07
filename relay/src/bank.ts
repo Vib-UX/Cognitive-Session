@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createPublicClient, http, isAddress, parseAbiItem, type Address } from "viem";
-import { evmChain, rpcCandidates, treasuryHome, treasuryHomes } from "./chains.js";
+import { evmChain, rpcCandidates, treasuryHome } from "./chains.js";
 
 /** USDC on Base. Kept for the Base treasury address default. */
 export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
@@ -17,6 +17,10 @@ export const STAKE_USDC = 50_000n;
 
 export const DEPOSIT_USD = "$1.00";
 export const STAKE_USD = "$0.05";
+
+/** Existing Base CCIP message for the cross-chain USDC lane. */
+export const BASE_CCIP_TX_URL =
+  "https://ccip.chain.link/msg/0xffa95e81e2a89a55f2f9352e7930f07c97157646558135c5000d420e81cf915d";
 
 const TRANSFER = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
 
@@ -55,8 +59,20 @@ export function chainLabel(chainId?: number): string {
   }
 }
 
+export function transferHref(fromChain: string, toChain: string): string | null {
+  if (fromChain === toChain || (fromChain !== "Base" && toChain !== "Base")) return null;
+  return BASE_CCIP_TX_URL;
+}
+
 export function transferLine(you: "won" | "lost" | "short", fromChain: string, toChain: string): string {
   if (you === "short") return `Deposit ${DEPOSIT_USD} USDC to cover the ${STAKE_USD}.`;
+  const href = transferHref(fromChain, toChain);
+  if (href) {
+    const direction = you === "won"
+      ? `from their ${fromChain} to your ${toChain}`
+      : `from your ${fromChain} to their ${toChain}`;
+    return `CCIP transaction: cross-chain transfer ${direction}. ${href}`;
+  }
   if (you === "won") return `${STAKE_USD} from their ${fromChain} to your ${toChain}.`;
   return `${STAKE_USD} from your ${fromChain} to their ${toChain}.`;
 }
@@ -137,25 +153,25 @@ export class PlayBank {
     return new PlayBank(file);
   }
 
-  balanceOf(wallet: string): bigint {
-    return this.balances.get(wallet.toLowerCase()) ?? 0n;
+  balanceOf(wallet: string, chainId = 8453): bigint {
+    return this.balances.get(this.slot(wallet, chainId)) ?? 0n;
   }
 
-  credit(wallet: string, txHash: string, amount: bigint): boolean {
+  credit(wallet: string, txHash: string, amount: bigint, chainId = 8453): boolean {
     if (amount <= 0n || !/^0x[a-fA-F0-9]{64}$/.test(txHash)) return false;
     const hash = txHash.toLowerCase();
     if (this.seen.has(hash)) return false;
-    const id = wallet.toLowerCase();
+    const id = this.slot(wallet, chainId);
     this.seen.add(hash);
     this.balances.set(id, (this.balances.get(id) ?? 0n) + amount);
     this.save();
     return true;
   }
 
-  /** Move `amount` from the loser's balance to the winner. False when the loser is short. */
-  take(loser: string, winner: string, amount: bigint): boolean {
-    const from = loser.toLowerCase();
-    const to = winner.toLowerCase();
+  /** Move `amount` from the loser's chain balance to the winner's chain balance. */
+  take(loser: string, winner: string, amount: bigint, fromChain = 8453, toChain = 8453): boolean {
+    const from = this.slot(loser, fromChain);
+    const to = this.slot(winner, toChain);
     if (from === to || amount <= 0n) return false;
     const have = this.balances.get(from) ?? 0n;
     if (have < amount) return false;
@@ -165,8 +181,8 @@ export class PlayBank {
     return true;
   }
 
-  reserveClaim(wallet: string): bigint {
-    const id = wallet.toLowerCase();
+  reserveClaim(wallet: string, chainId = 8453): bigint {
+    const id = this.slot(wallet, chainId);
     if (this.claiming.has(id)) throw new Error("Claim already in progress.");
     const amount = this.balances.get(id) ?? 0n;
     if (amount <= 0n) return 0n;
@@ -176,58 +192,54 @@ export class PlayBank {
     return amount;
   }
 
-  restore(wallet: string, amount: bigint): void {
-    const id = wallet.toLowerCase();
+  restore(wallet: string, amount: bigint, chainId = 8453): void {
+    const id = this.slot(wallet, chainId);
     this.claiming.delete(id);
     if (amount <= 0n) return;
     this.balances.set(id, (this.balances.get(id) ?? 0n) + amount);
     this.save();
   }
 
-  finishClaim(wallet: string): void {
-    this.claiming.delete(wallet.toLowerCase());
+  finishClaim(wallet: string, chainId = 8453): void {
+    this.claiming.delete(this.slot(wallet, chainId));
   }
 
   async pull(wallet: Address, chainId = 8453): Promise<{ added: number; chains: string[] }> {
-    const order = [chainId];
-    for (const home of treasuryHomes()) {
-      if (!order.includes(home.chainId)) order.push(home.chainId);
+    const home = treasuryHome(chainId);
+    if (!home) {
+      throw new Error(
+        `Deposit $1.00 USDC on Base or Optimism. ${chainLabel(chainId)} has no treasury yet, and a claim there is sent over CCIP.`,
+      );
     }
+    const rows = await this.readDeposits(wallet, chainId);
     let added = 0;
-    const chains: string[] = [];
-    const failures: string[] = [];
-    for (const id of order) {
-      const home = treasuryHome(id);
-      if (!home) continue;
-      try {
-        const rows = await this.readDeposits(wallet, id);
-        let found = 0;
-        for (const row of rows) {
-          if (this.credit(wallet, row.txHash, row.amount)) found += 1;
-        }
-        if (found > 0) {
-          added += found;
-          chains.push(home.name);
-        }
-      } catch (err) {
-        failures.push(err instanceof Error ? err.message : "Could not read the deposit.");
-      }
+    for (const row of rows) {
+      if (this.credit(wallet, row.txHash, row.amount, chainId)) added += 1;
     }
-    if (added === 0 && failures.length > 0) throw new Error(failures[0]);
-    return { added, chains };
+    return { added, chains: added > 0 ? [home.name] : [] };
+  }
+
+  private slot(wallet: string, chainId: number): string {
+    return `${chainId}:${wallet.toLowerCase()}`;
   }
 
   private load(): void {
     if (!this.file) return;
     try {
       const raw = JSON.parse(readFileSync(this.file, "utf8")) as Partial<SavedBank>;
-      for (const [wallet, units] of Object.entries(raw.balances ?? {})) {
-        if (!/^0x[a-fA-F0-9]{40}$/.test(wallet)) continue;
+      let legacy = false;
+      for (const [key, units] of Object.entries(raw.balances ?? {})) {
         if (typeof units !== "string" || !/^\d+$/.test(units)) continue;
-        this.balances.set(wallet.toLowerCase(), BigInt(units));
+        if (/^\d+:0x[a-fA-F0-9]{40}$/.test(key)) {
+          this.balances.set(key.toLowerCase(), BigInt(units));
+          continue;
+        }
+        if (/^0x[a-fA-F0-9]{40}$/.test(key)) legacy = true;
       }
-      for (const hash of raw.seen ?? []) {
-        if (typeof hash === "string" && /^0x[a-fA-F0-9]{64}$/.test(hash)) this.seen.add(hash.toLowerCase());
+      if (!legacy) {
+        for (const hash of raw.seen ?? []) {
+          if (typeof hash === "string" && /^0x[a-fA-F0-9]{64}$/.test(hash)) this.seen.add(hash.toLowerCase());
+        }
       }
     } catch {
       /* first run, or a file that is not a bank */

@@ -100,6 +100,7 @@ export interface StakeTransfer {
   fromChain: string;
   toChain: string;
   line: string;
+  href?: string | null;
 }
 
 export interface BankView {

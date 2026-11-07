@@ -125,6 +125,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
           break;
         }
+        case "openLink": {
+          const href = String(msg.href ?? "");
+          if (href.startsWith("https://ccip.chain.link/")) {
+            await vscode.env.openExternal(vscode.Uri.parse(href));
+          }
+          break;
+        }
         case "copyDeposit": {
           const address = this.bridge.bank?.address || "0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c";
           await vscode.env.clipboard.writeText(address);
@@ -307,6 +314,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       border-top: 1px solid var(--vscode-widget-border, #444);
     }
     .addr { word-break: break-all; font-size: 12px; line-height: 1.4; margin: 6px 0; user-select: text; }
+    #bankTransfer a { word-break: break-all; color: var(--vscode-textLink-foreground); }
     .choice input { width: auto; margin: 0; }
   </style>
 </head>
@@ -495,8 +503,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         $('setupAddress').textContent = view.address;
       }
       const line = view.transfer && view.transfer.line;
-      $('bankTransfer').style.display = line ? '' : 'none';
-      $('bankTransfer').textContent = line || '';
+      const box = $('bankTransfer');
+      box.textContent = '';
+      box.style.display = line ? '' : 'none';
+      if (line) {
+        const match = String(line).match(/https:\/\/ccip\.chain\.link\/\S+/);
+        const url = (view.transfer && view.transfer.href) || (match && match[0]) || '';
+        const text = match ? String(line).slice(0, match.index).trim() : String(line);
+        if (text) box.appendChild(document.createTextNode(text));
+        if (url) {
+          if (text) box.appendChild(document.createElement('br'));
+          const link = document.createElement('a');
+          link.href = url;
+          link.textContent = url;
+          link.addEventListener('click', (event) => {
+            event.preventDefault();
+            vscode.postMessage({ type: 'openLink', href: url });
+          });
+          box.appendChild(link);
+        }
+      }
       const note = view.note || '';
       $('bankNote').style.display = note ? '' : 'none';
       $('bankNote').textContent = note;

@@ -166,6 +166,8 @@ export interface StakeTransfer {
   fromChain: string;
   toChain: string;
   line: string;
+  /** CCIP explorer link when the transfer crosses to or from Base. */
+  href?: string | null;
 }
 
 export interface BankView {

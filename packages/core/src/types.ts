@@ -172,7 +172,7 @@ export interface BankView {
   canClaim: boolean;
   canPlay: boolean;
   claimLabel: string;
-  transfer: { id: string; you: "won" | "lost" | "short"; fromChain: string; toChain: string; line: string } | null;
+  transfer: { id: string; you: "won" | "lost" | "short"; fromChain: string; toChain: string; line: string; href?: string | null } | null;
   note: string;
 }
 

@@ -8,6 +8,7 @@ import {
   STAKE_USDC,
   chainLabel,
   formatUsdc,
+  transferHref,
   transferLine,
 } from "./bank.js";
 import { treasuryHome } from "./chains.js";
@@ -247,7 +248,7 @@ export class RelayStore {
       const chainId = conn.identity?.chainId ?? 8453;
       const found = await this.bank.pull(wallet, chainId);
       if (quiet && found.added === 0) return;
-      const units = this.bank.balanceOf(wallet);
+      const units = this.bank.balanceOf(wallet, chainId);
       const where = found.chains.join(" and ") || treasuryHome(chainId)?.name || chainLabel(chainId);
       this.notes.set(
         id,
@@ -277,17 +278,17 @@ export class RelayStore {
     }
     let reserved = 0n;
     try {
-      reserved = this.bank.reserveClaim(wallet);
+      reserved = this.bank.reserveClaim(wallet, chainId);
       if (reserved <= 0n) throw new Error("Nothing to claim yet.");
       const paid = await payReward({ wallet, chainId, amount: reserved });
-      this.bank.finishClaim(wallet);
+      this.bank.finishClaim(wallet, chainId);
       const usd = formatUsdc(reserved);
       const tx = `${paid.txHash.slice(0, 6)}…${paid.txHash.slice(-4)}`;
       this.notes.set(id, `${usd} USDC on ${paid.chainName}. ${tx}`);
       this.sendBank(conn);
       this.send(conn.ws, { type: "bank_paid", txHash: paid.txHash, chainName: paid.chainName, usd });
     } catch (err) {
-      if (reserved > 0n) this.bank.restore(wallet, reserved);
+      if (reserved > 0n) this.bank.restore(wallet, reserved, chainId);
       const message = err instanceof Error ? err.message : "Claim failed.";
       this.notes.set(id, message);
       this.sendBank(conn);
@@ -969,7 +970,7 @@ export class RelayStore {
     const chainId = conn.identity?.chainId ?? 8453;
     const home = treasuryHome(chainId);
     const wallet = conn.identity?.walletAddress;
-    if (!wallet || this.bank.balanceOf(wallet) < STAKE_USDC) {
+    if (!wallet || this.bank.balanceOf(wallet, chainId) < STAKE_USDC) {
       if (home) throw new Error(`Deposit $1.00 USDC on ${home.name} to ${home.address} before you play.`);
       throw new Error("Deposit $1.00 USDC on Base or Optimism before you play. A claim on this chain is sent over CCIP.");
     }
@@ -1000,7 +1001,7 @@ export class RelayStore {
       loserWallet &&
         winnerWallet &&
         loserWallet.toLowerCase() !== winnerWallet.toLowerCase() &&
-        this.bank.take(loserWallet, winnerWallet, STAKE_USDC),
+        this.bank.take(loserWallet, winnerWallet, STAKE_USDC, loser?.chainId ?? 8453, winner?.chainId ?? 8453),
     );
     const you = (id: SessionId): StakeTransfer["you"] => {
       if (!moved) return "short";
@@ -1014,6 +1015,7 @@ export class RelayStore {
         fromChain,
         toChain,
         line: transferLine(you(id), fromChain, toChain),
+        href: transferHref(fromChain, toChain),
       });
       const conn = this.byId.get(id);
       if (conn) this.sendBank(conn);
@@ -1022,9 +1024,9 @@ export class RelayStore {
 
   private bankView(conn: Conn): BankView {
     const wallet = conn.identity?.walletAddress;
-    const units = wallet ? this.bank.balanceOf(wallet) : 0n;
-    const id = conn.identity?.id;
     const chainId = conn.identity?.chainId ?? 8453;
+    const units = wallet ? this.bank.balanceOf(wallet, chainId) : 0n;
+    const id = conn.identity?.id;
     const home = treasuryHome(chainId);
     return {
       depositUsd: DEPOSIT_USD,
