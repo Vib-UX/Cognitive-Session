@@ -26,8 +26,14 @@ const TRANSFER = parseAbiItem("event Transfer(address indexed from, address inde
 
 /** How far back a deposit check looks. Base produces blocks fast enough that a short block count misses a same-day transfer. */
 const DEPOSIT_WINDOW_SEC = 3n * 24n * 60n * 60n;
+/** Smallest block span a deposit check walks, so a same-day transfer is not missed when blocks are fast. */
+const MIN_DEPOSIT_BLOCKS = 49_000n;
 /** Public Base RPCs reject a getLogs span much wider than this. */
-const LOG_SPAN = 49_000n;
+const BASE_LOG_SPAN = 49_000n;
+/** Optimism's official RPC rejects eth_getLogs ranges wider than 10,000 blocks. */
+const OPTIMISM_LOG_SPAN = 9_000n;
+/** Parallel log pages. A 3-day Optimism window is about fifteen pages, and the check has to finish inside the client timeout. */
+const LOG_CONCURRENCY = 4;
 
 /**
  * First block to scan for a deposit. Uses the recent block time so the window stays three days
@@ -45,9 +51,32 @@ export function depositFromBlock(
   if (blockSpan > 0n && timeSpan > 0n) {
     blocks = (blockSpan * DEPOSIT_WINDOW_SEC + timeSpan - 1n) / timeSpan;
   }
-  if (blocks < LOG_SPAN) blocks = LOG_SPAN;
+  if (blocks < MIN_DEPOSIT_BLOCKS) blocks = MIN_DEPOSIT_BLOCKS;
   if (blocks > 1_500_000n) blocks = 1_500_000n;
   return latest > blocks ? latest - blocks : 0n;
+}
+
+/** Page size for eth_getLogs on this chain. Wider pages are rejected by the public RPC. */
+export function logSpan(chainId: number): bigint {
+  return chainId === 10 ? OPTIMISM_LOG_SPAN : BASE_LOG_SPAN;
+}
+
+/** Inclusive block pages of at most `span` blocks, covering `fromBlock` through `latest`. */
+export function logRanges(
+  fromBlock: bigint,
+  latest: bigint,
+  span: bigint,
+): Array<{ from: bigint; to: bigint }> {
+  const ranges: Array<{ from: bigint; to: bigint }> = [];
+  const size = span > 0n ? span : 1n;
+  let cursor = fromBlock;
+  while (cursor <= latest) {
+    const end = cursor + size - 1n > latest ? latest : cursor + size - 1n;
+    ranges.push({ from: cursor, to: end });
+    if (end === latest) break;
+    cursor = end + 1n;
+  }
+  return ranges;
 }
 
 export function depositAddress(): Address {
@@ -129,23 +158,22 @@ export async function readUsdcDeposits(wallet: Address, chainId: number): Promis
       const sampleBlock = latest > 2_000n ? latest - 2_000n : 0n;
       const sample = sampleBlock === latest ? head : await client.getBlock({ blockNumber: sampleBlock });
       const fromBlock = depositFromBlock(latest, head.timestamp, sampleBlock, sample.timestamp);
-      const rows: DepositRow[] = [];
-      let cursor = fromBlock;
-      while (cursor <= latest) {
-        const end = cursor + LOG_SPAN - 1n > latest ? latest : cursor + LOG_SPAN - 1n;
-        const logs = await client.getLogs({
+      const ranges = logRanges(fromBlock, latest, logSpan(chainId));
+      const pages = await mapPool(ranges, LOG_CONCURRENCY, (range) =>
+        client.getLogs({
           address: home.usdc,
           event: TRANSFER,
           args: { from: wallet, to: home.address },
-          fromBlock: cursor,
-          toBlock: end,
-        });
+          fromBlock: range.from,
+          toBlock: range.to,
+        }),
+      );
+      const rows: DepositRow[] = [];
+      for (const logs of pages) {
         for (const log of logs) {
           if (!log.transactionHash || log.args.value == null) continue;
           rows.push({ txHash: log.transactionHash, amount: log.args.value });
         }
-        if (end === latest) break;
-        cursor = end + 1n;
       }
       return rows;
     } catch (err) {
@@ -154,6 +182,22 @@ export async function readUsdcDeposits(wallet: Address, chainId: number): Promis
     }
   }
   throw new Error(`Could not read the ${home.name} deposit (${lastDetail}).`);
+}
+
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      while (next < items.length) {
+        const index = next;
+        next += 1;
+        out[index] = await fn(items[index]);
+      }
+    }),
+  );
+  return out;
 }
 
 interface SavedBank {

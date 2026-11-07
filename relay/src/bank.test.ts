@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type WebSocket from "ws";
-import { BASE_CCIP_TX_URL, PlayBank, STAKE_USDC, depositFromBlock, formatUsdc, transferHref, transferLine } from "./bank.js";
+import { BASE_CCIP_TX_URL, PlayBank, STAKE_USDC, depositFromBlock, formatUsdc, logRanges, logSpan, transferHref, transferLine } from "./bank.js";
 import { RelayStore } from "./store.js";
 import type { ServerMessage, SessionId } from "./types.js";
 
@@ -65,6 +65,24 @@ test("a deposit from earlier the same day is still inside the scan window", () =
   const depositedAt = 54_133_873n;
   assert.ok(from < depositedAt);
   assert.ok(latest - from >= 49_000n);
+});
+
+test("optimism log pages stay inside the 10,000 block RPC limit", () => {
+  assert.ok(logSpan(10) <= 10_000n);
+  assert.equal(logSpan(8453), 49_000n);
+  const latest = 1_000_000n;
+  const from = latest - 130_000n;
+  const depositedAt = latest - 5_620n;
+  const ranges = logRanges(from, latest, logSpan(10));
+  assert.ok(ranges.length > 1);
+  assert.equal(ranges[0]?.from, from);
+  assert.equal(ranges[ranges.length - 1]?.to, latest);
+  for (const range of ranges) {
+    assert.ok(range.to - range.from + 1n <= 10_000n);
+    assert.ok(range.to >= range.from);
+  }
+  assert.ok(ranges.some((range) => depositedAt >= range.from && depositedAt <= range.to));
+  assert.equal(formatUsdc(1_200_000n), "$1.20");
 });
 
 test("a dollar formats as $1.00 and a game as $0.05", () => {
