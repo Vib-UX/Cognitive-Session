@@ -43,16 +43,13 @@ export class BoardPanel {
         case "next":
           this.bridge.next();
           break;
-        case "snakeJoin":
-          this.bridge.snakeJoin(typeof msg.code === "string" ? msg.code : undefined);
+        case "flappyJoin":
+          this.bridge.flappyJoin();
           break;
-        case "snakeSteer":
-          if (msg.dir === "up" || msg.dir === "down" || msg.dir === "left" || msg.dir === "right") {
-            this.bridge.snakeSteer(msg.dir, Boolean(msg.boost));
+        case "flappyScore":
+          if (typeof msg.contestId === "string" && Number.isFinite(Number(msg.score))) {
+            this.bridge.flappyScore(String(msg.contestId), Number(msg.score));
           }
-          break;
-        case "snakeLeave":
-          this.bridge.snakeLeave();
           break;
         case "ready":
           this.postPrefs(this.prefs.get());
@@ -298,11 +295,8 @@ export class BoardPanel {
     .maze { display: grid; grid-template-columns: repeat(5, 48px); gap: 4px; width: max-content; }
     .maze button.opcell { background: #eeeed2; color: #1a1a1a; }
     .maze button.numcell { background: #fff; color: #1a1a1a; }
-    .snake-canvas { width: min(100%, 520px); aspect-ratio: 1; background: #070b10; border-radius: 12px; display: block; }
-    .snake-meta { margin-top: 8px; color: var(--muted, #9aa); font-size: 13px; }
-    .snake-scores { list-style: none; padding: 0; margin: 8px 0 0; }
-    .snake-scores li { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
-    .snake-scores i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .flappy-canvas { width: min(100%, 640px); aspect-ratio: 24 / 10; background: #1f1d19; border-radius: 4px; display: block; touch-action: none; }
+    .flappy-meta { margin-top: 8px; font-family: "Iowan Old Style", Palatino, Georgia, serif; font-size: 15px; }
   </style>
 </head>
 <body>
@@ -349,15 +343,13 @@ export class BoardPanel {
     </div>
   </div>
   </div>
-  <div id="snakeWrap" style="display:none">
-    <canvas id="snakeCanvas" class="snake-canvas" width="480" height="480" aria-label="Snake arena"></canvas>
-    <div class="snake-meta" id="snakeStatus">Joining the open arena…</div>
-    <ol class="snake-scores" id="snakeScores"></ol>
+  <div id="flappyWrap" style="display:none">
+    <canvas id="flappyCanvas" class="flappy-canvas" width="480" height="200" aria-label="Flappy"></canvas>
+    <div class="flappy-meta" id="flappyStatus">Waiting for another player.</div>
     <div class="actions" style="margin-top:8px">
-      <button id="snakeJoin">Join arena</button>
-      <button id="snakeLeave" class="secondary">Leave</button>
+      <button id="flappyJoin">Find a player</button>
+      <button id="flappyFlap" class="secondary">Flap</button>
     </div>
-    <div class="sub">Arrows or WASD to turn. Hold space to boost.</div>
   </div>
   <div id="puzzleWrap" style="display:none">
     <div id="sudokuView" style="display:none">
@@ -1266,303 +1258,140 @@ export class BoardPanel {
         }
       }
     }
-    let snakeDir = null;
-    let snakeBoost = false;
-    let snakeSent = '';
-    const snakePressed = [];
-    const snakePose = new Map();
-    let snakeSim = null;
-    let snakeSeenAt = 0;
-    let snakeScoreSig = '';
-    let snakeClock = '';
-    let snakeGrid = null;
-    let snakeGridKey = '';
-    function snakeHeadline(match) {
-      if (!match) return 'Joining the open arena…';
-      if (match.status === 'waiting') return 'Room ' + match.roomCode + ' · waiting for another snake';
-      if (match.status === 'finished') {
-        if (match.result && match.result.kind === 'draw') return 'Draw';
-        const winner = (match.players || []).find((p) => match.result && p.id === match.result.winner);
-        const name = winner ? winner.name : 'Someone';
-        return name + ' wins' + (match.result && match.result.reason === 'last' ? ' — last one in' : '');
-      }
-      const left = Math.max(0, (match.endsAt || Date.now()) - Date.now());
-      const secs = Math.floor(left / 1000);
-      const me = (match.players || []).find((p) => state.me && p.id === state.me.id);
-      return match.roomCode + ' · ' + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') + (me && !me.alive ? ' · respawning' : '');
+    const BIRD_X = 4;
+    const BOARD_W = 24;
+    const BOARD_H = 10;
+    const FLAP_V = -0.9;
+    const GRAVITY = 0.15;
+    const MAX_FALL = 0.8;
+    const SPACING = 12;
+    let flappyView = null;
+    let flappyRound = null;
+    let flappyAcc = 0;
+    let flappyLast = 0;
+    let flappyPosted = '';
+    function gapSize(h) { return Math.max(3, Math.floor(h / 3)); }
+    function pull(box) {
+      let a = (box.state + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      box.state = a >>> 0;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     }
-    const SNAKE_TICK = 110;
-    const SNAKE_LEAD = 5;
-    const SNAKE_STEP = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } };
-    function oppositeDir(dir) {
-      if (dir === 'up') return 'down';
-      if (dir === 'down') return 'up';
-      if (dir === 'left') return 'right';
-      return 'left';
+    function randomGap(h, rand) {
+      return 1 + Math.floor(rand() * Math.max(1, h - gapSize(h) - 1));
     }
-    function copyBody(body) {
-      return body.map((cell) => ({ x: cell.x, y: cell.y }));
+    function newFlappy(rand) {
+      return { w: BOARD_W, h: BOARD_H, y: BOARD_H / 2, vy: 0, pipes: [{ x: BOARD_W - 1, gap: randomGap(BOARD_H, rand) }], score: 0, over: false };
     }
-    function stepBody(body, dir) {
-      const head = body[0];
-      if (!head) return body;
-      const delta = SNAKE_STEP[dir] || SNAKE_STEP.right;
-      const next = [{ x: head.x + delta.x, y: head.y + delta.y }].concat(body);
-      next.pop();
-      return next;
+    function flapBird(game) {
+      if (!game || game.over) return game;
+      return Object.assign({}, game, { vy: FLAP_V });
     }
-    function slideBody(body, dir, frac) {
-      if (frac <= 0 || !body.length) return body;
-      const delta = SNAKE_STEP[dir] || SNAKE_STEP.right;
-      const out = [{ x: body[0].x + delta.x * frac, y: body[0].y + delta.y * frac }];
-      for (let i = 1; i < body.length; i++) {
-        out.push({
-          x: body[i].x + (body[i - 1].x - body[i].x) * frac,
-          y: body[i].y + (body[i - 1].y - body[i].y) * frac,
-        });
-      }
-      return out;
+    function tickFlappy(game, rand) {
+      if (game.over) return game;
+      let vy = Math.min(MAX_FALL, game.vy + GRAVITY);
+      let y = game.y + vy;
+      if (y < 0) { y = 0; vy = 0; }
+      let pipes = game.pipes.map((pipe) => ({ x: pipe.x - 1, gap: pipe.gap })).filter((pipe) => pipe.x >= 0);
+      const last = pipes[pipes.length - 1];
+      if (!last || last.x <= game.w - 1 - SPACING) pipes = pipes.concat([{ x: game.w - 1, gap: randomGap(game.h, rand) }]);
+      const score = game.score + pipes.filter((pipe) => pipe.x === BIRD_X - 1).length;
+      const row = Math.round(y);
+      const opening = gapSize(game.h);
+      const hit = row >= game.h || pipes.some((pipe) => pipe.x === BIRD_X && (row < pipe.gap || row >= pipe.gap + opening));
+      return { w: game.w, h: game.h, y: y, vy: vy, pipes: pipes, score: score, over: hit };
     }
-    function leadOf(head, server, dir) {
-      const delta = SNAKE_STEP[dir] || SNAKE_STEP.right;
-      return (head.x - server.x) * delta.x + (head.y - server.y) * delta.y;
+    function startFlappy(view) {
+      const box = { state: (view.seed >>> 0) || 1 };
+      flappyRound = { contestId: view.id, game: newFlappy(function () { return pull(box); }), rng: box.state };
+      flappyAcc = 0;
+      flappyPosted = '';
     }
-    function reconcileSim(server, dir) {
-      const head = snakeSim.body[0];
-      const serverHead = server[0];
-      if (!head || !serverHead) {
-        snakeSim.body = copyBody(server);
-        snakeSim.dir = dir;
-        snakeSim.acc = 0;
+    function applyFlappy(view) {
+      flappyView = view;
+      if (!view || view.status === 'waiting' || !view.id) {
+        if (!view || view.status === 'waiting') flappyRound = null;
         return;
       }
-      const dx = head.x - serverHead.x;
-      const dy = head.y - serverHead.y;
-      if (dx * dx + dy * dy > 16) {
-        snakeSim.body = copyBody(server);
-        snakeSim.dir = dir;
-        snakeSim.acc = 0;
-        return;
-      }
-      const grew = server.length - snakeSim.body.length;
-      if (grew === 0) return;
-      if (grew > 0 && grew <= 2) {
-        const tail = snakeSim.body[snakeSim.body.length - 1] || head;
-        for (let i = 0; i < grew; i++) snakeSim.body.push({ x: tail.x, y: tail.y });
-        return;
-      }
-      if (grew < 0 && snakeSim.body.length + grew >= 2) {
-        snakeSim.body = snakeSim.body.slice(0, server.length);
-        return;
-      }
-      snakeSim.body = copyBody(server);
-      snakeSim.acc = 0;
+      if (view.status === 'playing' && (!flappyRound || flappyRound.contestId !== view.id)) startFlappy(view);
     }
-    function advanceSim(serverHead, want, boost, dt) {
-      const hops = boost && snakeSim.body.length > 10 ? 2 : 1;
-      const maxLead = hops * SNAKE_LEAD;
-      snakeSim.acc += dt;
-      let guard = 0;
-      while (snakeSim.acc >= SNAKE_TICK && snakeSim.body[0] && guard < 4) {
-        const dir = want !== oppositeDir(snakeSim.dir) ? want : snakeSim.dir;
-        if (leadOf(snakeSim.body[0], serverHead, dir) >= maxLead) break;
-        snakeSim.dir = dir;
-        snakeSim.acc -= SNAKE_TICK;
-        guard += 1;
-        for (let hop = 0; hop < hops; hop++) snakeSim.body = stepBody(snakeSim.body, snakeSim.dir);
-      }
-      if (snakeSim.acc > SNAKE_TICK) snakeSim.acc = SNAKE_TICK;
-      const head = snakeSim.body[0];
-      const frac = head && leadOf(head, serverHead, snakeSim.dir) >= maxLead ? 0 : Math.min(snakeSim.acc / SNAKE_TICK, 1);
-      return slideBody(snakeSim.body, snakeSim.dir, frac);
+    function flappyLine() {
+      const view = flappyView;
+      const game = flappyRound && flappyRound.game;
+      const stake = view && view.stake ? ' ' + view.stake : '';
+      if (!view || view.status === 'waiting' || view.seeking) return 'Waiting for another player.';
+      if (view.winner === 'you') return 'You win ' + view.you + ' to ' + view.them + '.' + stake;
+      if (view.winner === 'them') return (view.themName || 'They') + ' wins ' + view.them + ' to ' + view.you + '.' + stake;
+      if (view.winner === 'draw') return 'Draw, ' + view.you + ' each';
+      if (game && game.over) return 'You scored ' + game.score + '. Waiting for ' + (view.themName || 'them') + '.';
+      if (game) return 'Score ' + game.score;
+      if (view.you != null) return 'You scored ' + view.you + '. Waiting for ' + (view.themName || 'them') + '.';
+      return 'Same course. Space flaps.';
     }
-    function extrapolate(body, dir, ageMs) {
-      const extra = Math.min(Math.max(0, ageMs) / SNAKE_TICK, 1.6);
-      let pts = copyBody(body);
-      const whole = Math.floor(extra);
-      for (let i = 0; i < whole; i++) pts = stepBody(pts, dir);
-      return slideBody(pts, dir, extra - whole);
-    }
-    function easeToward(prev, next, dt) {
-      if (!prev || prev.length !== next.length) return next;
-      const slow = 1 - Math.exp(-dt / 36);
-      const fast = 1 - Math.exp(-dt / 16);
-      const out = [];
-      for (let i = 0; i < next.length; i++) {
-        const cell = next[i];
-        const cur = prev[i];
-        const dx = cell.x - cur.x;
-        const dy = cell.y - cur.y;
-        const dist = dx * dx + dy * dy;
-        if (dist > 64) {
-          out.push({ x: cell.x, y: cell.y });
-          continue;
-        }
-        const k = dist > 6.25 ? fast : slow;
-        out.push({ x: cur.x + dx * k, y: cur.y + dy * k });
-      }
-      return out;
-    }
-    function poseOf(player, dt, age, matchId) {
-      const next = player.body || [];
-      const mine = state.me && player.id === state.me.id;
-      if (!next.length || !player.alive) {
-        if (mine) snakeSim = null;
-        snakePose.delete(player.id);
-        return [];
-      }
-      if (mine) {
-        const want = snakeDir && snakeDir !== oppositeDir(player.dir) ? snakeDir : player.dir;
-        if (!snakeSim || snakeSim.matchId !== matchId) {
-          snakeSim = { matchId: matchId, body: copyBody(next), dir: want, acc: 0 };
-        } else {
-          reconcileSim(next, player.dir);
-        }
-        const drawn = advanceSim(next[0], want, snakeBoost && next.length > 10, dt || 16);
-        snakePose.set(player.id, drawn);
-        return drawn;
-      }
-      const target = extrapolate(next, player.dir, age);
-      const eased = easeToward(snakePose.get(player.id), target, dt || 16);
-      snakePose.set(player.id, eased);
-      return eased;
-    }
-    function syncSnakeHud(match) {
-      const clock = snakeHeadline(match);
-      if (clock !== snakeClock) {
-        snakeClock = clock;
-        $('snakeStatus').textContent = clock;
-      }
-      if (!match) {
-        if (snakeScoreSig) {
-          snakeScoreSig = '';
-          $('snakeScores').innerHTML = '';
-        }
-        return;
-      }
-      const sig = (match.players || []).map((player) => player.id + ':' + player.score + ':' + (player.alive ? 1 : 0)).join('|');
-      if (sig === snakeScoreSig) return;
-      snakeScoreSig = sig;
-      const list = $('snakeScores');
-      list.innerHTML = '';
-      const ranked = (match.players || []).slice().sort((a, b) => b.score - a.score);
-      for (const player of ranked) {
-        const li = document.createElement('li');
-        li.innerHTML = '<i></i><span></span><strong></strong>';
-        li.children[0].style.background = player.color;
-        li.children[1].textContent = player.name + (state.me && player.id === state.me.id ? ' (you)' : '');
-        li.children[2].textContent = String(player.score);
-        list.append(li);
-      }
-    }
-    function drawSnake(dt) {
-      const canvas = $('snakeCanvas');
-      if (!state) {
-        $('snakeStatus').textContent = 'Connecting…';
-        return;
-      }
-      const match = state.snake;
-      syncSnakeHud(match);
-      if (!match) return;
-      const css = canvas.clientWidth;
-      if (css < 10) return;
+    function drawFlappy() {
+      const canvas = $('flappyCanvas');
+      const status = $('flappyStatus');
+      if (status) status.textContent = flappyLine();
+      if (!canvas) return;
+      const cssW = canvas.clientWidth;
+      if (cssW < 10) return;
+      const cssH = cssW * BOARD_H / BOARD_W;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const px = Math.floor(css * dpr);
-      if (canvas.width !== px || canvas.height !== px) {
-        canvas.width = px;
-        canvas.height = px;
+      const pxW = Math.floor(cssW * dpr);
+      const pxH = Math.floor(cssH * dpr);
+      if (canvas.width !== pxW || canvas.height !== pxH) {
+        canvas.width = pxW;
+        canvas.height = pxH;
       }
       const ctx = canvas.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, css, css);
-      ctx.fillStyle = '#070b10';
-      ctx.fillRect(0, 0, css, css);
-      const gridKey = css + 'x' + match.width + 'x' + match.height;
-      if (snakeGridKey !== gridKey) {
-        snakeGrid = document.createElement('canvas');
-        snakeGrid.width = Math.floor(css);
-        snakeGrid.height = Math.floor(css);
-        const g = snakeGrid.getContext('2d');
-        const step = css / match.width;
-        g.strokeStyle = 'rgba(255,255,255,0.05)';
-        g.beginPath();
-        for (let i = 1; i < match.width; i++) {
-          g.moveTo(Math.round(i * step) + 0.5, 0);
-          g.lineTo(Math.round(i * step) + 0.5, css);
-        }
-        for (let i = 1; i < match.height; i++) {
-          g.moveTo(0, Math.round(i * step) + 0.5);
-          g.lineTo(css, Math.round(i * step) + 0.5);
-        }
-        g.stroke();
-        snakeGridKey = gridKey;
+      ctx.fillStyle = '#1f1d19';
+      ctx.fillRect(0, 0, cssW, cssH);
+      const game = flappyRound && flappyRound.game;
+      if (!game) return;
+      const cellW = cssW / game.w;
+      const cellH = cssH / game.h;
+      const opening = gapSize(game.h);
+      ctx.fillStyle = '#6e5744';
+      for (const pipe of game.pipes) {
+        const x = pipe.x * cellW;
+        ctx.fillRect(x, 0, cellW + 0.5, pipe.gap * cellH);
+        const bottom = (pipe.gap + opening) * cellH;
+        ctx.fillRect(x, bottom, cellW + 0.5, cssH - bottom);
       }
-      ctx.drawImage(snakeGrid, 0, 0, css, css);
-      const cell = css / match.width;
-      for (const pellet of match.pellets || []) {
-        ctx.fillStyle = pellet.value > 1 ? '#fde68a' : '#fbbf24';
-        ctx.beginPath();
-        ctx.arc(pellet.x * cell + cell / 2, pellet.y * cell + cell / 2, (pellet.value > 1 ? 0.28 : 0.16) * cell, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      const seen = new Set();
-      const age = snakeSeenAt ? performance.now() - snakeSeenAt : 0;
-      for (const player of match.players || []) {
-        seen.add(player.id);
-        const body = poseOf(player, dt || 16, age, match.matchId);
-        if (body.length < 1) continue;
-        ctx.globalAlpha = player.alive ? 1 : 0.35;
-        ctx.strokeStyle = player.color;
-        ctx.fillStyle = player.color;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.lineWidth = cell * 0.72;
-        if (body.length > 1) {
-          ctx.beginPath();
-          ctx.moveTo(body[0].x * cell + cell / 2, body[0].y * cell + cell / 2);
-          for (let i = 1; i < body.length; i++) ctx.lineTo(body[i].x * cell + cell / 2, body[i].y * cell + cell / 2);
-          ctx.stroke();
-        }
-        const head = body[0];
-        const hx = head.x * cell + cell / 2;
-        const hy = head.y * cell + cell / 2;
-        ctx.beginPath();
-        ctx.arc(hx, hy, cell * 0.42, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-      for (const id of Array.from(snakePose.keys())) if (!seen.has(id)) snakePose.delete(id);
+      const row = Math.max(0, Math.min(game.h - 1, Math.round(game.y)));
+      ctx.fillStyle = game.over ? '#9a4030' : '#f4f1ea';
+      ctx.beginPath();
+      ctx.arc(BIRD_X * cellW + cellW / 2, row * cellH + cellH / 2, Math.min(cellW, cellH) * 0.36, 0, Math.PI * 2);
+      ctx.fill();
     }
-    function sendSnake(dir, boost) {
-      if (dir) snakeDir = dir;
-      snakeBoost = !!boost;
-      const heading = dir || snakeDir;
-      if (!heading) return;
-      const stamp = heading + (snakeBoost ? ':1' : ':0');
-      if (stamp === snakeSent) return;
-      snakeSent = stamp;
-      vscode.postMessage({ type: 'snakeSteer', dir: heading, boost: snakeBoost });
+    function flapNow() {
+      if (!flappyRound || !flappyRound.game || flappyRound.game.over) return;
+      flappyRound.game = flapBird(flappyRound.game);
     }
-    function pressSnake(dir, down) {
-      const at = snakePressed.indexOf(dir);
-      if (down) {
-        if (at >= 0) snakePressed.splice(at, 1);
-        snakePressed.push(dir);
-      } else if (at >= 0) snakePressed.splice(at, 1);
-      return snakePressed.length ? snakePressed[snakePressed.length - 1] : null;
+    function stepLocal() {
+      if (!flappyRound || !flappyRound.game || flappyRound.game.over) return;
+      const box = { state: flappyRound.rng >>> 0 };
+      flappyRound.game = tickFlappy(flappyRound.game, function () { return pull(box); });
+      flappyRound.rng = box.state;
+      if (flappyRound.game.over && flappyPosted !== flappyRound.contestId) {
+        flappyPosted = flappyRound.contestId;
+        vscode.postMessage({ type: 'flappyScore', contestId: flappyRound.contestId, score: flappyRound.game.score });
+      }
     }
     function showGame(game) {
       if (prefs.games.indexOf(game) === -1) game = prefs.games[0] || 'chess';
       activeGame = game;
       $('chessWrap').style.display = game === 'chess' ? '' : 'none';
-      $('snakeWrap').style.display = game === 'snakes' ? '' : 'none';
-      $('puzzleWrap').style.display = game === 'chess' || game === 'snakes' ? 'none' : '';
+      $('flappyWrap').style.display = game === 'flappy' ? '' : 'none';
+      $('puzzleWrap').style.display = game === 'chess' || game === 'flappy' ? 'none' : '';
       $('sudokuView').style.display = game === 'sudoku' ? '' : 'none';
       $('mathsView').style.display = game === 'maths' ? '' : 'none';
       $('mateView').style.display = game === 'mate' ? '' : 'none';
       const bar = $('gameBar');
       bar.innerHTML = '';
-      const labels = { chess: 'Chess', snakes: 'Snakes', sudoku: 'Sudoku', maths: 'Maths', mate: 'Mate in 1' };
+      const labels = { chess: 'Chess', flappy: 'Flappy', sudoku: 'Sudoku', maths: 'Maths', mate: 'Mate in 1' };
       for (const id of prefs.games) {
         const b = document.createElement('button');
         b.textContent = labels[id] || id;
@@ -1574,17 +1403,16 @@ export class BoardPanel {
       if (game === 'maths' && !math) newBrain();
       if (game === 'mate' && !mate) newMate();
       if (game === 'chess') render();
-      else if (game === 'snakes') {
-        $('subtitle').textContent = 'Snakes. Leave the code blank and everyone shares one arena.';
-        vscode.postMessage({ type: 'snakeJoin', code: 'OPEN' });
-        drawSnake();
+      else if (game === 'flappy') {
+        $('subtitle').textContent = 'Flappy';
+        drawFlappy();
       }
-      else if (game === 'sudoku') $('subtitle').textContent = 'Sudoku. Each row, column, and box uses 1–9 once.';
+      else if (game === 'sudoku') $('subtitle').textContent = 'Sudoku';
       else if (game === 'mate') {
         $('subtitle').textContent = 'Mate in 1.';
         if (mate) drawMate();
       }
-      else $('subtitle').textContent = 'Maths. Cross Math, KenKen, or a number maze.';
+      else $('subtitle').textContent = 'Maths';
     }
     const $ = (id) => document.getElementById(id);
 
@@ -1602,39 +1430,18 @@ export class BoardPanel {
     $('brainNew').onclick = () => newBrain();
     $('brainUndo').onclick = () => undoBrain();
     $('mateNew').onclick = () => newMate();
-    $('snakeJoin').onclick = () => vscode.postMessage({ type: 'snakeJoin', code: 'OPEN' });
-    $('snakeLeave').onclick = () => vscode.postMessage({ type: 'snakeLeave' });
-    function snakeKeyDir(event) {
-      const key = event.key.toLowerCase();
-      if (key === 'arrowup' || key === 'w') return 'up';
-      if (key === 'arrowdown' || key === 's') return 'down';
-      if (key === 'arrowleft' || key === 'a') return 'left';
-      if (key === 'arrowright' || key === 'd') return 'right';
-      return null;
-    }
-    window.addEventListener('keydown', (event) => {
-      if (activeGame !== 'snakes' || event.repeat) return;
-      if (event.code === 'Space') {
-        event.preventDefault();
-        sendSnake(snakeDir, true);
-        return;
-      }
-      const dir = snakeKeyDir(event);
-      if (!dir) return;
+    $('flappyJoin').onclick = () => vscode.postMessage({ type: 'flappyJoin' });
+    $('flappyFlap').onclick = () => flapNow();
+    $('flappyCanvas').addEventListener('pointerdown', (event) => {
       event.preventDefault();
-      const next = pressSnake(dir, true);
-      if (next) sendSnake(next, snakeBoost);
+      flapNow();
     });
-    window.addEventListener('keyup', (event) => {
-      if (activeGame !== 'snakes') return;
-      if (event.code === 'Space') {
-        sendSnake(snakeDir, false);
-        return;
-      }
-      const dir = snakeKeyDir(event);
-      if (!dir) return;
-      const next = pressSnake(dir, false);
-      if (next) sendSnake(next, snakeBoost);
+    window.addEventListener('keydown', (event) => {
+      if (activeGame !== 'flappy' || event.repeat) return;
+      const key = event.key.toLowerCase();
+      if (key !== ' ' && key !== 'arrowup' && key !== 'w') return;
+      event.preventDefault();
+      flapNow();
     });
 
     window.addEventListener('message', (event) => {
@@ -1654,34 +1461,21 @@ export class BoardPanel {
         if (msg.game === 'sudoku' && (!sudo || $('sudoNote').textContent === 'Solved.')) newSudoku();
         if (msg.game === 'maths' && (!math || $('brainNote').textContent.indexOf('Solved') !== -1)) newBrain();
         if (msg.game === 'mate' && !mate) newMate();
-        if (msg.game === 'snakes') vscode.postMessage({ type: 'snakeJoin', code: 'OPEN' });
-        return;
-      }
-      if (msg.type === 'snake') {
-        if (!state) state = { snake: msg.snake, me: msg.me };
-        else {
-          state.snake = msg.snake;
-          if (msg.me) state.me = msg.me;
-        }
-        snakeSeenAt = performance.now();
+        if (msg.game === 'flappy') vscode.postMessage({ type: 'flappyJoin' });
         return;
       }
       if (msg.type !== 'state') return;
       state = msg.state;
-      if (state && state.snake) snakeSeenAt = performance.now();
-      if (activeGame === 'snakes') return;
+      if (state && state.flappy) applyFlappy(state.flappy);
+      if (activeGame === 'flappy') return;
       selected = null;
       render();
     });
-    let snakeLast = 0;
-    function snakeFrame(now) {
-      requestAnimationFrame(snakeFrame);
-      if (activeGame !== 'snakes') return;
-      const dt = snakeLast ? Math.min(48, now - snakeLast) : 16;
-      snakeLast = now;
-      drawSnake(dt);
-    }
-    requestAnimationFrame(snakeFrame);
+    setInterval(() => {
+      if (activeGame !== 'flappy') return;
+      if (flappyRound && flappyRound.game && !flappyRound.game.over) stepLocal();
+      drawFlappy();
+    }, 100);
     vscode.postMessage({ type: 'ready' });
   </script>
 </body>

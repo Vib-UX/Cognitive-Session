@@ -1,7 +1,7 @@
 {
   "name": "session",
   "version": "0.1.0",
-  "description": "Connect your Claude Code session to another live Cursor or Claude session. Nearby discovery, lobby, room codes, chess while you build.",
+  "description": "Play chess or flappy with another live Cursor or Claude session. Pick a game in /session, then prompt. The relay pairs the two players.",
   "author": {
     "name": "Session"
   },
@@ -15,7 +15,20 @@
     "relay_url": {
       "type": "string",
       "title": "Relay WebSocket URL",
+      "description": "WebSocket URL of the Session relay. Read when the MCP process starts.",
       "default": "wss://sessionrelay-production.up.railway.app/ws"
+    },
+    "columns": {
+      "type": "number",
+      "title": "Pane width",
+      "description": "Columns asked for the docked pane, from 30 to 100",
+      "default": 60
+    },
+    "pieces": {
+      "type": "string",
+      "title": "Pieces",
+      "description": "unicode glyphs, or letters for K Q R B N P",
+      "default": "unicode"
     }
   }
 }

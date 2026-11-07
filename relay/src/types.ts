@@ -139,9 +139,48 @@ export type ClientMessage =
   | { type: "poll" }
   | { type: "set_match_meta"; matchId: string; lockTx?: string; ccipMessageId?: string; payoutTx?: string; status?: ChessState["status"] }
   | { type: "claim_reward"; amount: string }
+  | { type: "sync_deposit" }
+  | { type: "claim_balance" }
   | { type: "snake_join"; code?: string }
   | { type: "snake_steer"; matchId: string; dir: SnakeDir; boost?: boolean }
-  | { type: "snake_leave" };
+  | { type: "snake_leave" }
+  | { type: "flappy_join" }
+  | { type: "flappy_score"; contestId: string; score: number };
+
+export interface FlappyView {
+  id: string;
+  seed: number;
+  status: "waiting" | "playing" | "done";
+  seeking: boolean;
+  you: number | null;
+  them: number | null;
+  themName: string | null;
+  winner: "you" | "them" | "draw" | null;
+  /** Shown after the round. $0.05 from one selected chain to the other, or a deposit prompt. */
+  stake?: string | null;
+}
+
+export interface StakeTransfer {
+  id: string;
+  you: "won" | "lost" | "short";
+  fromChain: string;
+  toChain: string;
+  line: string;
+}
+
+export interface BankView {
+  depositUsd: string;
+  stakeUsd: string;
+  balanceUsd: string;
+  balance: string;
+  address: string;
+  depositChain: string;
+  canClaim: boolean;
+  canPlay: boolean;
+  claimLabel: string;
+  transfer: StakeTransfer | null;
+  note: string;
+}
 
 export type ServerMessage =
   | { type: "welcome"; identity: SessionIdentity; peers: PeerInfo[]; room: RoomInfo | null }
@@ -152,8 +191,10 @@ export type ServerMessage =
   | { type: "challenge_resolved"; challengeId: string; accepted: boolean; match?: ChessState }
   | { type: "match"; match: ChessState }
   | { type: "queue"; seeking: boolean; waiting: number; drawing?: boolean }
-  | { type: "error"; message: string; scope?: "reward" }
+  | { type: "error"; message: string; scope?: "reward" | "bank" }
   | { type: "reward"; txHash: string; chainId: number; amount: string; chainName: string }
+  | { type: "bank"; bank: BankView }
+  | { type: "bank_paid"; txHash: string; chainName: string; usd: string }
   | {
       type: "poll_state";
       peers: PeerInfo[];
@@ -162,7 +203,9 @@ export type ServerMessage =
       match: ChessState | null;
       challenges: ChallengeInfo[];
       snake: SnakeState | null;
+      flappy: FlappyView | null;
     }
+  | { type: "flappy"; flappy: FlappyView }
   | { type: "snake"; match: SnakeState };
 
 export interface PresenceSnapshot {

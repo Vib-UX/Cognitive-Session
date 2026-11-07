@@ -11,3 +11,5 @@ ffi = false
 base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
 sepolia = "${SEPOLIA_RPC_URL}"
 base = "${BASE_RPC_URL}"
+ethereum = "https://ethereum-rpc.publicnode.com"
+optimism = "https://optimism-rpc.publicnode.com"

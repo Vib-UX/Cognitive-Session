@@ -6,7 +6,7 @@ import { defineConfig, type Connect, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 const webRoot = path.dirname(fileURLToPath(import.meta.url));
-const vsixName = "session-ide-0.1.1.vsix";
+const vsixName = "session-ide-0.1.2.vsix";
 const vsixPath = path.resolve(webRoot, "../packages/cursor-extension", vsixName);
 
 function vsixPlugin(): Plugin {

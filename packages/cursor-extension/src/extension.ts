@@ -6,7 +6,7 @@ import * as vscode from "vscode";
 import { BoardPanel } from "./boardPanel";
 import { Credits } from "./credits";
 import type { GameId } from "./prefs";
-import { GAME_IDS, PrefsStore } from "./prefs";
+import { GAME_IDS, PrefsStore, isEvmAddress } from "./prefs";
 import { RelayBridge } from "./relayBridge";
 import { SidebarProvider } from "./sidebarProvider";
 
@@ -27,11 +27,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
   bridge = new RelayBridge(relayUrl, displayName, instanceId);
   const prefs = new PrefsStore(context);
-  if (prefs.get().onboarded && !context.globalState.get("session.addedSnakes")) {
-    if (!prefs.get().games.includes("snakes")) {
-      await prefs.update({ games: [...prefs.get().games, "snakes"] });
-    }
-    await context.globalState.update("session.addedSnakes", true);
+  if (prefs.get().onboarded && !context.globalState.get("session.addedFlappy")) {
+    const games = prefs.get().games.filter((game) => game !== "flappy");
+    await prefs.update({ games: [...games, "flappy"] });
+    await context.globalState.update("session.addedFlappy", true);
   }
   if (prefs.get().onboarded && !context.globalState.get("session.addedMate")) {
     if (!prefs.get().games.includes("mate")) {
@@ -41,6 +40,10 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   const credits = new Credits(() => prefs.get().wallet);
+  const saved = prefs.get();
+  if (isEvmAddress(saved.wallet)) {
+    bridge.setPlayer(saved.wallet as `0x${string}`, saved.chainId);
+  }
   const openBoard = (game?: GameId) => {
     if (!bridge) return;
     BoardPanel.show(bridge, prefs, credits, game);
@@ -81,7 +84,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // When a match starts, open the board tab automatically
   let sawMatchId: string | null = null;
-  let sawSnakeId: string | null = null;
+  let sawFlappyId: string | null = null;
+  let sawFlappyResult: string | null = null;
   let rewardedMatch: string | null = null;
   bridge.onChange((state) => {
     const id = state.match?.matchId ?? null;
@@ -91,21 +95,24 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.window.setStatusBarMessage(`Session: match ${id} started`, 4000);
     }
     if (!id) sawMatchId = null;
-    const snakeId = state.snake?.matchId ?? null;
-    const inSnake = state.snake?.players.some(
-      (player) => player.id === state.me?.id && player.connected,
-    );
-    if (
-      snakeId &&
-      state.snake?.status !== "finished" &&
-      inSnake &&
-      prefs.get().games.includes("snakes") &&
-      snakeId !== sawSnakeId
-    ) {
-      sawSnakeId = snakeId;
-      openBoard("snakes");
+    const flapId = state.flappy?.status === "playing" ? state.flappy.id : null;
+    if (flapId && prefs.get().games.includes("flappy") && flapId !== sawFlappyId) {
+      sawFlappyId = flapId;
+      openBoard("flappy");
+      vscode.window.setStatusBarMessage("Session: flappy", 4000);
     }
-    if (!inSnake) sawSnakeId = null;
+    if (state.flappy?.status === "done" && state.flappy.id && state.flappy.id !== sawFlappyResult) {
+      sawFlappyResult = state.flappy.id;
+      const flap = state.flappy;
+      const stake = flap.stake ? ` ${flap.stake}` : "";
+      const line =
+        flap.winner === "draw"
+          ? `Session: flappy draw ${flap.you}`
+          : flap.winner === "you"
+            ? `Session: you win ${flap.you} to ${flap.them}.${stake}`
+            : `Session: ${flap.themName || "they"} wins ${flap.them} to ${flap.you}.${stake}`;
+      vscode.window.setStatusBarMessage(line, 6000);
+    }
     const result = state.match?.result as { kind?: string; winner?: string } | undefined;
     if (
       state.match &&
@@ -136,20 +143,20 @@ export async function activate(context: vscode.ExtensionContext) {
         room?: string;
       };
       if (!raw.at || raw.at <= lastTrigger) return;
-      if (!raw.game || !(GAME_IDS as readonly string[]).includes(raw.game)) return;
+      const gameName = raw.game === "snakes" ? "flappy" : raw.game;
+      if (!gameName || !(GAME_IDS as readonly string[]).includes(gameName)) return;
       lastTrigger = raw.at;
       const picked = prefs.get();
       if (!picked.onboarded) return;
-      const game = raw.game as GameId;
+      const game = gameName as GameId;
       const panel = BoardPanel.show(bridge, prefs, credits);
       if (game === "chess" && picked.multiplayer) {
         const match = bridge.state.match;
         if (!match || match.status === "finished") bridge.next();
       }
-      if (game === "snakes") {
-        const room = raw.room?.trim() || "OPEN";
-        bridge.snakeJoin(room);
-        vscode.window.setStatusBarMessage(`Session: snakes · room ${room.toUpperCase()}`, 4000);
+      if (game === "flappy") {
+        bridge.flappyJoin();
+        vscode.window.setStatusBarMessage("Session: flappy", 4000);
       } else {
         vscode.window.setStatusBarMessage(`Session: ${game} from your prompt`, 3000);
       }

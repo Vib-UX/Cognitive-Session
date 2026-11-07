@@ -1,6 +1,16 @@
 import { randomBytes } from "node:crypto";
 import type WebSocket from "ws";
 import { syncEntity } from "./arkiv-sync.js";
+import {
+  DEPOSIT_USD,
+  PlayBank,
+  STAKE_USD,
+  STAKE_USDC,
+  chainLabel,
+  formatUsdc,
+  transferLine,
+} from "./bank.js";
+import { treasuryHome } from "./chains.js";
 import { payReward } from "./treasury.js";
 import { applyMove, applyResign, checkTimeout, createMatch } from "./chess.js";
 import { kickWorkflow, makePairId, whiteIsFirst } from "./draw.js";
@@ -22,9 +32,12 @@ import type {
   RoomInfo,
   ServerMessage,
   SessionId,
+  BankView,
+  FlappyView,
   SessionIdentity,
   SnakeDir,
   SnakeState,
+  StakeTransfer,
 } from "./types.js";
 
 interface Conn {
@@ -32,6 +45,21 @@ interface Conn {
   identity: SessionIdentity | null;
   roomCode: string | null;
   lastSeen: number;
+}
+
+interface FlappySeat {
+  id: SessionId;
+  name: string;
+  score: number | null;
+}
+
+interface FlappyContest {
+  id: string;
+  seed: number;
+  status: "playing" | "done";
+  a: FlappySeat;
+  b: FlappySeat;
+  winner: SessionId | "draw" | null;
 }
 
 interface PendingDraw {
@@ -53,7 +81,14 @@ function roomCode(): string {
 }
 
 export class RelayStore {
-  constructor(private readonly options?: { draw?: boolean }) {}
+  private readonly bank: PlayBank;
+  private readonly transfers = new Map<SessionId, StakeTransfer>();
+  private readonly notes = new Map<SessionId, string>();
+  private readonly settled = new Set<string>();
+
+  constructor(private readonly options?: { draw?: boolean; bank?: PlayBank; requireDeposit?: boolean }) {
+    this.bank = options?.bank ?? new PlayBank();
+  }
 
   private conns = new Map<WebSocket, Conn>();
   private byId = new Map<SessionId, Conn>();
@@ -64,6 +99,10 @@ export class RelayStore {
   private snakeByRoom = new Map<string, string>();
   /** FIFO of sessions that pressed Next and are waiting for a partner. */
   private queue: SessionId[] = [];
+  /** FIFO of sessions waiting to fly a flappy round against one other player. */
+  private flappyQueue: SessionId[] = [];
+  private flappies = new Map<string, FlappyContest>();
+  private flappyByPlayer = new Map<SessionId, string>();
   private pending = new Map<`0x${string}`, PendingDraw>();
   challenges = new Map<string, ChallengeInfo>();
 
@@ -78,6 +117,7 @@ export class RelayStore {
       this.queue = this.queue.filter((id) => id !== conn.identity!.id);
       this.cancelDraw(conn.identity.id, "Your partner left before the draw.");
       this.dropSnakePlayer(conn.identity.id);
+      this.abandonFlappy(conn.identity.id);
       this.byId.delete(conn.identity.id);
       if (conn.roomCode) this.leaveRoom(conn);
     }
@@ -143,6 +183,12 @@ export class RelayStore {
         case "claim_reward":
           void this.onClaim(conn, msg.amount);
           break;
+        case "sync_deposit":
+          void this.onSyncDeposit(conn);
+          break;
+        case "claim_balance":
+          void this.onClaimBalance(conn);
+          break;
         case "snake_join":
           this.onSnakeJoin(conn, msg.code);
           break;
@@ -151,6 +197,12 @@ export class RelayStore {
           break;
         case "snake_leave":
           this.onSnakeLeave(conn);
+          break;
+        case "flappy_join":
+          this.onFlappyJoin(conn);
+          break;
+        case "flappy_score":
+          this.onFlappyScore(conn, msg.contestId, msg.score);
           break;
         default:
           this.send(ws, { type: "error", message: "Unknown message type" });
@@ -182,6 +234,67 @@ export class RelayStore {
     }
   }
 
+  private async onSyncDeposit(conn: Conn, quiet = false): Promise<void> {
+    const id = conn.identity?.id;
+    const wallet = conn.identity?.walletAddress;
+    if (!id || !wallet) {
+      if (!quiet) {
+        this.send(conn.ws, { type: "error", scope: "bank", message: "Set a wallet in the lobby first." });
+      }
+      return;
+    }
+    try {
+      const chainId = conn.identity?.chainId ?? 8453;
+      const added = await this.bank.pull(wallet, chainId);
+      if (quiet && added === 0) return;
+      const units = this.bank.balanceOf(wallet);
+      const where = treasuryHome(chainId)?.name ?? chainLabel(chainId);
+      this.notes.set(
+        id,
+        added > 0
+          ? `Deposit added. Balance ${formatUsdc(units)}.`
+          : `No new USDC yet. Send ${DEPOSIT_USD} USDC on ${where} to the treasury.`,
+      );
+      this.sendBank(conn);
+    } catch (err) {
+      if (quiet) return;
+      this.notes.set(id, err instanceof Error ? err.message : "Could not read the deposit.");
+      this.sendBank(conn);
+    }
+  }
+
+  private async onClaimBalance(conn: Conn): Promise<void> {
+    const id = conn.identity?.id;
+    const wallet = conn.identity?.walletAddress;
+    const chainId = conn.identity?.chainId;
+    if (!id || !wallet || !chainId) {
+      this.send(conn.ws, {
+        type: "error",
+        scope: "bank",
+        message: "Set a wallet and a mainnet chain in the lobby first.",
+      });
+      return;
+    }
+    let reserved = 0n;
+    try {
+      reserved = this.bank.reserveClaim(wallet);
+      if (reserved <= 0n) throw new Error("Nothing to claim yet.");
+      const paid = await payReward({ wallet, chainId, amount: reserved });
+      this.bank.finishClaim(wallet);
+      const usd = formatUsdc(reserved);
+      const tx = `${paid.txHash.slice(0, 6)}…${paid.txHash.slice(-4)}`;
+      this.notes.set(id, `${usd} USDC on ${paid.chainName}. ${tx}`);
+      this.sendBank(conn);
+      this.send(conn.ws, { type: "bank_paid", txHash: paid.txHash, chainName: paid.chainName, usd });
+    } catch (err) {
+      if (reserved > 0n) this.bank.restore(wallet, reserved);
+      const message = err instanceof Error ? err.message : "Claim failed.";
+      this.notes.set(id, message);
+      this.sendBank(conn);
+      this.send(conn.ws, { type: "error", scope: "bank", message });
+    }
+  }
+
   private onHello(conn: Conn, identity: SessionIdentity): void {
     const existing = this.byId.get(identity.id);
     if (existing && existing !== conn) {
@@ -200,6 +313,8 @@ export class RelayStore {
       peers: this.peerList(),
       room: conn.roomCode ? (this.rooms.get(conn.roomCode) ?? null) : null,
     });
+    this.sendBank(conn);
+    if (identity.walletAddress) void this.onSyncDeposit(conn, true);
     this.broadcastPeers();
   }
 
@@ -373,6 +488,7 @@ export class RelayStore {
 
   private onChallenge(conn: Conn, to: SessionId, stakeWei: string): void {
     if (!conn.identity) throw new Error("Say hello first");
+    this.assertDeposit(conn);
     const target = this.byId.get(to);
     if (!target?.identity) throw new Error("Peer offline");
     if (to === conn.identity.id) throw new Error("Cannot challenge yourself");
@@ -462,8 +578,10 @@ export class RelayStore {
 
     let match: ChessState | undefined;
     if (accept) {
+      this.assertDeposit(conn);
       const fromConn = this.byId.get(challenge.from);
       if (!fromConn?.identity) throw new Error("Challenger went offline");
+      this.assertDeposit(fromConn);
       const code = this.ensureSharedRoom(fromConn, conn);
       match = createMatch(code, challenge.from, challenge.to, challenge.stakeWei);
       this.matches.set(match.matchId, match);
@@ -494,8 +612,7 @@ export class RelayStore {
     const match = this.matches.get(matchId);
     if (!match) throw new Error("Match not found");
     const next = applyMove(match, conn.identity.id, uci);
-    this.matches.set(matchId, next);
-    this.broadcastMatch(next);
+    this.commitMatch(next);
   }
 
   /**
@@ -505,6 +622,7 @@ export class RelayStore {
    */
   private onNext(conn: Conn): void {
     if (!conn.identity) throw new Error("Say hello first");
+    this.assertDeposit(conn);
     const me = conn.identity.id;
     this.queue = this.queue.filter((id) => id !== me);
     this.cancelDraw(me, "");
@@ -514,8 +632,7 @@ export class RelayStore {
     if (active) {
       avoid = active.white === me ? active.black : active.white;
       const finished = applyResign(active, me);
-      this.matches.set(active.matchId, finished);
-      this.broadcastMatch(finished);
+      this.commitMatch(finished);
     }
 
     const partnerId = this.queue.find(
@@ -663,8 +780,7 @@ export class RelayStore {
     const match = this.matches.get(matchId);
     if (!match) throw new Error("Match not found");
     const next = applyResign(match, conn.identity.id);
-    this.matches.set(matchId, next);
-    this.broadcastMatch(next);
+    this.commitMatch(next);
   }
 
   private onMatchMeta(
@@ -688,6 +804,129 @@ export class RelayStore {
     this.broadcastMatch(next);
   }
 
+  private flappyFor(id: SessionId): FlappyContest | null {
+    const contestId = this.flappyByPlayer.get(id);
+    if (!contestId) return null;
+    return this.flappies.get(contestId) ?? null;
+  }
+
+  private flappyView(id: SessionId): FlappyView | null {
+    if (this.flappyQueue.includes(id)) {
+      return {
+        id: "",
+        seed: 0,
+        status: "waiting",
+        seeking: true,
+        you: null,
+        them: null,
+        themName: null,
+        winner: null,
+        stake: null,
+      };
+    }
+    const contest = this.flappyFor(id);
+    if (!contest) return null;
+    const me = contest.a.id === id ? contest.a : contest.b;
+    const them = contest.a.id === id ? contest.b : contest.a;
+    let winner: FlappyView["winner"] = null;
+    if (contest.status === "done") {
+      winner = contest.winner === "draw" ? "draw" : contest.winner === id ? "you" : "them";
+    }
+    return {
+      id: contest.id,
+      seed: contest.seed,
+      status: contest.status,
+      seeking: false,
+      you: me.score,
+      them: them.score,
+      themName: them.name,
+      winner,
+      stake: contest.status === "done" ? (this.transfers.get(id)?.line ?? null) : null,
+    };
+  }
+
+  private sendFlappy(conn: Conn): void {
+    if (!conn.identity) return;
+    const flappy = this.flappyView(conn.identity.id);
+    if (flappy) this.send(conn.ws, { type: "flappy", flappy });
+  }
+
+  private closeFlappy(contest: FlappyContest): void {
+    if (contest.a.score == null || contest.b.score == null) return;
+    if (contest.status === "done") return;
+    contest.status = "done";
+    if (contest.a.score === contest.b.score) contest.winner = "draw";
+    else {
+      contest.winner = contest.a.score > contest.b.score ? contest.a.id : contest.b.id;
+      const loser = contest.winner === contest.a.id ? contest.b.id : contest.a.id;
+      this.moveStake(contest.winner, loser, contest.id);
+    }
+  }
+
+  private onFlappyJoin(conn: Conn): void {
+    if (!conn.identity) throw new Error("Say hello first");
+    this.assertDeposit(conn);
+    const me = conn.identity.id;
+    const existing = this.flappyFor(me);
+    if (existing && existing.status === "playing") {
+      this.sendFlappy(conn);
+      return;
+    }
+    this.flappyQueue = this.flappyQueue.filter((id) => id !== me);
+    if (existing) this.flappyByPlayer.delete(me);
+    const partnerId = this.flappyQueue.find((id) => id !== me && this.byId.has(id));
+    if (!partnerId) {
+      this.flappyQueue.push(me);
+      this.sendFlappy(conn);
+      return;
+    }
+    this.flappyQueue = this.flappyQueue.filter((id) => id !== partnerId);
+    const partner = this.byId.get(partnerId);
+    if (!partner?.identity) throw new Error("Peer offline");
+    const contest: FlappyContest = {
+      id: `flap_${randomBytes(3).toString("hex")}`,
+      seed: randomBytes(4).readUInt32BE(0) || 1,
+      status: "playing",
+      a: { id: partnerId, name: partner.identity.displayName, score: null },
+      b: { id: me, name: conn.identity.displayName, score: null },
+      winner: null,
+    };
+    this.flappies.set(contest.id, contest);
+    this.flappyByPlayer.set(partnerId, contest.id);
+    this.flappyByPlayer.set(me, contest.id);
+    this.sendFlappy(partner);
+    this.sendFlappy(conn);
+  }
+
+  private onFlappyScore(conn: Conn, contestId: string, score: number): void {
+    if (!conn.identity) throw new Error("Say hello first");
+    if (!Number.isInteger(score) || score < 0 || score > 9999) throw new Error("Score is not a flappy result");
+    const contest = this.flappyFor(conn.identity.id);
+    if (!contest || contest.id !== contestId) throw new Error("No flappy round");
+    if (contest.status === "playing") {
+      const seat = contest.a.id === conn.identity.id ? contest.a : contest.b;
+      if (seat.score == null) seat.score = score;
+      this.closeFlappy(contest);
+    }
+    this.sendFlappy(conn);
+    const otherId = contest.a.id === conn.identity.id ? contest.b.id : contest.a.id;
+    const other = this.byId.get(otherId);
+    if (other) this.sendFlappy(other);
+  }
+
+  private abandonFlappy(id: SessionId): void {
+    this.flappyQueue = this.flappyQueue.filter((queued) => queued !== id);
+    const contest = this.flappyFor(id);
+    this.flappyByPlayer.delete(id);
+    if (!contest || contest.status === "done") return;
+    const seat = contest.a.id === id ? contest.a : contest.b;
+    if (seat.score == null) seat.score = 0;
+    this.closeFlappy(contest);
+    const otherId = contest.a.id === id ? contest.b.id : contest.a.id;
+    const other = this.byId.get(otherId);
+    if (other) this.sendFlappy(other);
+  }
+
   private onPoll(conn: Conn): void {
     if (!conn.identity) throw new Error("Say hello first");
     this.sweepTimeouts();
@@ -701,10 +940,12 @@ export class RelayStore {
       ),
       match,
       snake: this.snakeFor(conn),
+      flappy: this.flappyView(conn.identity.id),
       challenges: [...this.challenges.values()].filter(
         (c) => c.to === conn.identity!.id || c.from === conn.identity!.id,
       ),
     });
+    this.sendBank(conn);
   }
 
   private matchFor(conn: Conn): ChessState | null {
@@ -720,6 +961,89 @@ export class RelayStore {
       }
     }
     return null;
+  }
+
+  /** The ledger must cover $0.05. The deposit is USDC on the chain they picked, when that chain has a treasury. */
+  private assertDeposit(conn: Conn): void {
+    if (!this.options?.requireDeposit) return;
+    const chainId = conn.identity?.chainId ?? 8453;
+    const home = treasuryHome(chainId);
+    const wallet = conn.identity?.walletAddress;
+    if (!wallet || this.bank.balanceOf(wallet) < STAKE_USDC) {
+      if (home) throw new Error(`Deposit $1.00 USDC on ${home.name} to ${home.address} before you play.`);
+      throw new Error("Deposit $1.00 USDC on Base or Optimism before you play. A claim on this chain is sent over CCIP.");
+    }
+  }
+
+  private commitMatch(match: ChessState): void {
+    const prev = this.matches.get(match.matchId);
+    this.matches.set(match.matchId, match);
+    if (match.status === "finished" && prev?.status === "active" && match.result?.kind === "win") {
+      const winner = match.result.winner;
+      const loser = winner === match.white ? match.black : match.white;
+      this.moveStake(winner, loser, match.matchId);
+    }
+    this.broadcastMatch(match);
+  }
+
+  /** Settle $0.05 from the loser's deposit to the winner, then tell both sidebars. */
+  private moveStake(winnerId: SessionId, loserId: SessionId, key: string): void {
+    if (this.settled.has(key)) return;
+    this.settled.add(key);
+    const winner = this.byId.get(winnerId)?.identity;
+    const loser = this.byId.get(loserId)?.identity;
+    const fromChain = chainLabel(loser?.chainId);
+    const toChain = chainLabel(winner?.chainId);
+    const loserWallet = loser?.walletAddress;
+    const winnerWallet = winner?.walletAddress;
+    const moved = Boolean(
+      loserWallet &&
+        winnerWallet &&
+        loserWallet.toLowerCase() !== winnerWallet.toLowerCase() &&
+        this.bank.take(loserWallet, winnerWallet, STAKE_USDC),
+    );
+    const you = (id: SessionId): StakeTransfer["you"] => {
+      if (!moved) return "short";
+      return id === winnerId ? "won" : "lost";
+    };
+    for (const id of [winnerId, loserId]) {
+      this.notes.delete(id);
+      this.transfers.set(id, {
+        id: key,
+        you: you(id),
+        fromChain,
+        toChain,
+        line: transferLine(you(id), fromChain, toChain),
+      });
+      const conn = this.byId.get(id);
+      if (conn) this.sendBank(conn);
+    }
+  }
+
+  private bankView(conn: Conn): BankView {
+    const wallet = conn.identity?.walletAddress;
+    const units = wallet ? this.bank.balanceOf(wallet) : 0n;
+    const id = conn.identity?.id;
+    const chainId = conn.identity?.chainId ?? 8453;
+    const home = treasuryHome(chainId);
+    return {
+      depositUsd: DEPOSIT_USD,
+      stakeUsd: STAKE_USD,
+      balanceUsd: formatUsdc(units),
+      balance: units.toString(),
+      address: home?.address ?? "",
+      depositChain: home?.name ?? chainLabel(chainId),
+      canClaim: units > 0n,
+      canPlay: units >= STAKE_USDC,
+      claimLabel: units > 0n ? `Claim ${formatUsdc(units)}` : "Claim",
+      transfer: id ? (this.transfers.get(id) ?? null) : null,
+      note: id ? (this.notes.get(id) ?? "") : "",
+    };
+  }
+
+  private sendBank(conn: Conn): void {
+    if (!conn.identity) return;
+    this.send(conn.ws, { type: "bank", bank: this.bankView(conn) });
   }
 
   private broadcastMatch(match: ChessState): void {
@@ -806,8 +1130,7 @@ export class RelayStore {
       if (match.status !== "active") continue;
       const next = checkTimeout(match);
       if (next !== match && next.status === "finished") {
-        this.matches.set(id, next);
-        this.broadcastMatch(next);
+        this.commitMatch(next);
       } else if (next.clocksMs !== match.clocksMs) {
         this.matches.set(id, next);
       }

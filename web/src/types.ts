@@ -103,6 +103,17 @@ export interface SnakeState {
   };
 }
 
+export interface FlappyView {
+  id: string;
+  seed: number;
+  status: "waiting" | "playing" | "done";
+  seeking: boolean;
+  you: number | null;
+  them: number | null;
+  themName: string | null;
+  winner: "you" | "them" | "draw" | null;
+}
+
 export interface PresenceSnapshot {
   peers: PeerInfo[];
   rooms: RoomInfo[];

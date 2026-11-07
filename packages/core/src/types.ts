@@ -8,6 +8,7 @@ export interface SessionIdentity {
   host: HostKind;
   ensName?: string;
   walletAddress?: `0x${string}`;
+  chainId?: number;
 }
 
 export interface PeerInfo {
@@ -131,6 +132,7 @@ export type ClientMessage =
   | { type: "respond_challenge"; challengeId: string; accept: boolean }
   | { type: "move"; matchId: string; uci: string }
   | { type: "resign"; matchId: string }
+  | { type: "next" }
   | { type: "poll" }
   | {
       type: "set_match_meta";
@@ -142,7 +144,37 @@ export type ClientMessage =
     }
   | { type: "snake_join"; code?: string }
   | { type: "snake_steer"; matchId: string; dir: SnakeDir; boost?: boolean }
-  | { type: "snake_leave" };
+  | { type: "snake_leave" }
+  | { type: "flappy_join" }
+  | { type: "flappy_score"; contestId: string; score: number }
+  | { type: "sync_deposit" }
+  | { type: "claim_balance" };
+
+export interface FlappyView {
+  id: string;
+  seed: number;
+  status: "waiting" | "playing" | "done";
+  seeking: boolean;
+  you: number | null;
+  them: number | null;
+  themName: string | null;
+  winner: "you" | "them" | "draw" | null;
+  stake?: string | null;
+}
+
+export interface BankView {
+  depositUsd: string;
+  stakeUsd: string;
+  balanceUsd: string;
+  balance: string;
+  address: string;
+  depositChain: string;
+  canClaim: boolean;
+  canPlay: boolean;
+  claimLabel: string;
+  transfer: { id: string; you: "won" | "lost" | "short"; fromChain: string; toChain: string; line: string } | null;
+  note: string;
+}
 
 /** Relay -> client */
 export type ServerMessage =
@@ -153,7 +185,10 @@ export type ServerMessage =
   | { type: "challenge"; challenge: ChallengeInfo }
   | { type: "challenge_resolved"; challengeId: string; accepted: boolean; match?: ChessState }
   | { type: "match"; match: ChessState }
-  | { type: "error"; message: string }
+  | { type: "queue"; seeking: boolean; waiting: number; drawing?: boolean }
+  | { type: "error"; message: string; scope?: "reward" | "bank" }
+  | { type: "bank"; bank: BankView }
+  | { type: "bank_paid"; txHash: string; chainName: string; usd: string }
   | { type: "snake"; match: SnakeState }
   | {
       type: "poll_state";
@@ -163,7 +198,9 @@ export type ServerMessage =
       match: ChessState | null;
       challenges: ChallengeInfo[];
       snake: SnakeState | null;
-    };
+      flappy?: FlappyView | null;
+    }
+  | { type: "flappy"; flappy: FlappyView };
 
 export interface PresenceSnapshot {
   peers: PeerInfo[];

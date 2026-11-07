@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {CCIP, IRouterClient} from "./interfaces/CCIP.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 
-/// @notice Base treasury. Pays USDC on Base directly, or on another mainnet via CCIP 2.0.
+/// @notice USDC treasury for one chain. Pays on its home chain directly, or on another mainnet via CCIP 2.0.
 contract SessionTreasury {
     error NotOwner();
     error BadRecipient();
@@ -14,11 +14,12 @@ contract SessionTreasury {
     error FeeShort();
     error TransferFailed();
 
-    /// @dev CCIP chain selector for Base mainnet. Same-chain rewards skip the router.
+    /// @dev CCIP chain selector for Base mainnet.
     uint64 public constant BASE_SELECTOR = 15_971_525_489_660_198_786;
 
     IRouterClient public immutable router;
     address public immutable usdc;
+    uint64 public immutable homeSelector;
     address public owner;
 
     mapping(uint64 destChainSelector => bool allowed) public lane;
@@ -31,14 +32,22 @@ contract SessionTreasury {
         _;
     }
 
-    constructor(address router_, address usdc_) {
+    /// @param homeSelector_ CCIP selector of the chain this treasury is deployed on.
+    /// @param lanes_ Selectors this treasury may CCIP to. The home chain is always a direct transfer.
+    constructor(address router_, address usdc_, uint64 homeSelector_, uint64[] memory lanes_) {
         owner = msg.sender;
         router = IRouterClient(router_);
         usdc = usdc_;
+        homeSelector = homeSelector_;
+        for (uint256 i = 0; i < lanes_.length; i++) {
+            if (lanes_[i] == homeSelector_) revert LaneMissing();
+            lane[lanes_[i]] = true;
+            emit LaneSet(lanes_[i], true);
+        }
     }
 
     function setLane(uint64 destChainSelector, bool allowed) external onlyOwner {
-        if (destChainSelector == BASE_SELECTOR) revert LaneMissing();
+        if (destChainSelector == homeSelector) revert LaneMissing();
         lane[destChainSelector] = allowed;
         emit LaneSet(destChainSelector, allowed);
     }
@@ -48,12 +57,12 @@ contract SessionTreasury {
         view
         returns (uint256 fee)
     {
-        if (destChainSelector == BASE_SELECTOR) return 0;
+        if (destChainSelector == homeSelector) return 0;
         return router.getFee(destChainSelector, _message(recipient, amount, extraArgs));
     }
 
     /// @notice Pay `amount` of USDC (6 decimals) to `recipient`.
-    /// On Base, transfer directly. Elsewhere, CCIP the tokens to that wallet.
+    /// On the home chain, transfer directly. Elsewhere, CCIP the tokens to that wallet.
     /// `extraArgs` is built off-chain (CCIP 2.0 ExtraArgsV3) so the encoding can change without a redeploy.
     function sendReward(uint64 destChainSelector, address recipient, uint256 amount, bytes calldata extraArgs)
         external
@@ -64,7 +73,7 @@ contract SessionTreasury {
         if (recipient == address(0)) revert BadRecipient();
         if (amount == 0) revert BadAmount();
 
-        if (destChainSelector == BASE_SELECTOR) {
+        if (destChainSelector == homeSelector) {
             _callToken(usdc, abi.encodeWithSelector(IERC20.transfer.selector, recipient, amount));
             emit RewardSent(bytes32(0), destChainSelector, recipient, amount);
             return bytes32(0);

@@ -1,0 +1,9 @@
+# Workflow name is match-draw. Simulation is the proof. This file is not a DON deploy.
+base:
+  user-workflow:
+    workflow-name: "match-draw"
+    deployment-registry: "private"
+  workflow-artifacts:
+    workflow-path: "./main.ts"
+    config-path: "./config.json"
+    secrets-path: ""

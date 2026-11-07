@@ -3,13 +3,14 @@ import type { Credits } from "./credits";
 import type { GameId, PrefsStore } from "./prefs";
 import { EVM_CHAINS, GAME_IDS, isEvmAddress } from "./prefs";
 import type { RelayBridge } from "./relayBridge";
-import type { UiState } from "./types";
+import type { BankView, UiState } from "./types";
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "session.sidebar";
   private view?: vscode.WebviewView;
   private unsub?: () => void;
   private unsubCredits?: () => void;
+  private unsubBank?: () => void;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -38,6 +39,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     });
     this.unsubCredits?.();
     this.unsubCredits = this.credits.onChange(() => this.postCredits());
+    this.unsubBank?.();
+    this.unsubBank = this.bridge.onBank((view) => this.postBank(view));
 
     webviewView.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
@@ -71,9 +74,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "openBoard":
           this.openBoard();
           break;
-        case "playSnakes":
-          this.bridge.snakeJoin(typeof msg.code === "string" && msg.code.trim() ? msg.code : "OPEN");
-          this.openBoard("snakes");
+        case "playFlappy":
+          this.bridge.flappyJoin();
+          this.openBoard("flappy");
           break;
         case "refresh":
           this.bridge.poll();
@@ -91,7 +94,43 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "ready":
           this.postPrefs();
           this.postCredits();
+          this.postBank(this.bridge.bank);
           break;
+        case "claimBalance": {
+          const prefs = this.prefs.get();
+          if (!isEvmAddress(prefs.wallet) || !prefs.chainId) {
+            vscode.window.showWarningMessage("Session: set a wallet and a mainnet chain to receive USDC.");
+            break;
+          }
+          this.bridge.setPlayer(prefs.wallet as `0x${string}`, prefs.chainId);
+          this.bridge.claimBalance({
+            onPaid: (usd, chainName) => {
+              vscode.window.showInformationMessage(`Session: ${usd} USDC sent on ${chainName}.`);
+            },
+            onError: (message) => {
+              vscode.window.showErrorMessage(`Session: ${message}`);
+            },
+          });
+          break;
+        }
+        case "syncDeposit": {
+          const prefs = this.prefs.get();
+          if (!isEvmAddress(prefs.wallet)) {
+            vscode.window.showWarningMessage("Session: set a wallet before checking the deposit.");
+            break;
+          }
+          this.bridge.setPlayer(prefs.wallet as `0x${string}`, prefs.chainId);
+          if (!this.bridge.syncDeposit()) {
+            vscode.window.showWarningMessage("Session: connect to the relay, then check the deposit.");
+          }
+          break;
+        }
+        case "copyDeposit": {
+          const address = this.bridge.bank?.address || "0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c";
+          await vscode.env.clipboard.writeText(address);
+          vscode.window.showInformationMessage("Session: deposit address copied.");
+          break;
+        }
         case "claim": {
           const prefs = this.prefs.get();
           if (!isEvmAddress(prefs.wallet) || !prefs.chainId) {
@@ -139,6 +178,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             chainId: chain.id,
           });
           this.bridge.setPlayer(wallet as `0x${string}`, chain.id);
+          this.bridge.syncDeposit();
           this.postPrefs();
           break;
         }
@@ -148,8 +188,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     webviewView.onDidDispose(() => {
       this.unsub?.();
       this.unsubCredits?.();
+      this.unsubBank?.();
       this.unsub = undefined;
       this.unsubCredits = undefined;
+      this.unsubBank = undefined;
       this.view = undefined;
     });
   }
@@ -168,6 +210,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private postCredits() {
     this.view?.webview.postMessage({ type: "credits", credits: this.credits.view() });
+  }
+
+  private postBank(view: BankView | null) {
+    this.view?.webview.postMessage({ type: "bank", bank: view });
   }
 
   private html(webview: vscode.Webview): string {
@@ -260,6 +306,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       padding: 5px 0;
       border-top: 1px solid var(--vscode-widget-border, #444);
     }
+    .addr { word-break: break-all; font-size: 12px; line-height: 1.4; margin: 6px 0; user-select: text; }
     .choice input { width: auto; margin: 0; }
   </style>
 </head>
@@ -274,7 +321,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <h2 style="margin-top:0">Play</h2>
     <div class="games">
       <label class="choice"><input type="checkbox" data-game="chess" checked /> Chess</label>
-      <label class="choice"><input type="checkbox" data-game="snakes" checked /> Snakes</label>
+      <label class="choice"><input type="checkbox" data-game="flappy" checked /> Flappy</label>
       <label class="choice"><input type="checkbox" data-game="sudoku" /> Sudoku</label>
       <label class="choice"><input type="checkbox" data-game="maths" /> Maths</label>
       <label class="choice"><input type="checkbox" data-game="mate" /> Mate in 1</label>
@@ -284,18 +331,32 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <input id="wallet" placeholder="0x…" spellcheck="false" />
     <label class="field" for="chain">Chain</label>
     <select id="chain">
-      <option value="84532">Base Sepolia</option>
-      <option value="11155111">Ethereum Sepolia</option>
-      <option value="1">Ethereum</option>
       <option value="8453">Base</option>
+      <option value="1">Ethereum</option>
       <option value="42161">Arbitrum</option>
       <option value="10">Optimism</option>
       <option value="137">Polygon</option>
     </select>
+    <p class="empty" id="depositHint">Send $1.00 USDC on the chain you pick, to that chain's treasury. Claim pays you on the same chain.</p>
+    <div class="mono addr" id="setupAddress">0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c</div>
     <div class="err" id="walletErr"></div>
     <button class="next" id="savePrefs" style="margin-top:0">Continue</button>
   </div>
   <div id="app" style="display:none">
+  <div class="card" id="bankCard">
+    <h2 style="margin-top:0">Balance</h2>
+    <div class="row"><span>Deposit</span><span class="mono" id="bankDeposit">$1.00</span></div>
+    <p class="empty" id="bankHint">Send $1.00 USDC on the chain you pick, to that chain's treasury. Claim pays you on the same chain.</p>
+    <div class="mono addr" id="bankAddress">0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c</div>
+    <div class="actions">
+      <button class="secondary" id="copyDeposit">Copy address</button>
+      <button class="secondary" id="checkDeposit">Check deposit</button>
+    </div>
+    <div class="row"><span>Your balance</span><span class="mono" id="bankBalance">$0.00</span></div>
+    <div id="bankTransfer" style="display:none; margin-top:6px"></div>
+    <div class="empty" id="bankNote" style="display:none"></div>
+    <button class="next" id="claimBalance" disabled>Claim</button>
+  </div>
   <div class="card" id="creditsCard">
     <h2 style="margin-top:0">Credits</h2>
     <div class="row"><span>Today</span><span class="mono" id="creditToday">$0.00</span></div>
@@ -306,7 +367,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     <div class="ledger" id="ledger"></div>
   </div>
   <div class="stack">
-    <button class="next" id="playSnakes">Play snakes</button>
+    <button class="next" id="playFlappy">Play flappy</button>
     <button class="next" id="next">Play</button>
   </div>
 
@@ -348,12 +409,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     $('connect').onclick = () => vscode.postMessage({ type: 'connect' });
     $('refresh').onclick = () => vscode.postMessage({ type: 'refresh' });
     $('openBoard').onclick = () => vscode.postMessage({ type: 'openBoard' });
-    $('playSnakes').onclick = () => vscode.postMessage({ type: 'playSnakes' });
+    $('playFlappy').onclick = () => vscode.postMessage({ type: 'playFlappy' });
     $('createRoom').onclick = () => vscode.postMessage({ type: 'createRoom' });
     $('joinRoom').onclick = () => vscode.postMessage({ type: 'joinRoom', code: $('roomCode').value });
     $('leaveRoom').onclick = () => vscode.postMessage({ type: 'leaveRoom' });
     $('next').onclick = () => vscode.postMessage({ type: 'next' });
     $('claim').onclick = () => vscode.postMessage({ type: 'claim' });
+    $('claimBalance').onclick = () => vscode.postMessage({ type: 'claimBalance' });
+    $('checkDeposit').onclick = () => vscode.postMessage({ type: 'syncDeposit' });
+    $('copyDeposit').onclick = () => vscode.postMessage({ type: 'copyDeposit' });
     $('savePrefs').onclick = () => {
       const games = Array.from(document.querySelectorAll('[data-game]:checked')).map((el) => el.getAttribute('data-game'));
       const wallet = $('wallet').value.trim();
@@ -372,6 +436,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     $('multiplayer').onchange = () => {
       if ($('multiplayer').checked) document.querySelector('[data-game="chess"]').checked = true;
     };
+    const treasuries = {
+      8453: '0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c',
+      10: '0x2aa139d40b57560EE8bAa94325cfdc5a7721DE3f',
+      1: ''
+    };
+    function paintDeposit() {
+      const chainOption = $('chain').options[$('chain').selectedIndex];
+      const chainName = chainOption ? chainOption.textContent : 'your chain';
+      const addr = treasuries[$('chain').value] || '';
+      const text = addr
+        ? 'Send $1.00 USDC on ' + chainName + ' to this treasury. Claim pays you on ' + chainName + '.'
+        : chainName + ' has no treasury yet. Deposit USDC on Base or Optimism. Claim on ' + chainName + ' is sent over CCIP.';
+      $('depositHint').textContent = text;
+      $('bankHint').textContent = text;
+      if (addr) {
+        $('setupAddress').textContent = addr;
+        $('bankAddress').textContent = addr;
+      }
+    }
+    $('chain').onchange = paintDeposit;
 
     let prefs = { onboarded: false, games: ['chess'], multiplayer: true };
     function chessMulti() {
@@ -395,6 +479,41 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       });
     }
 
+    function applyBank(bank) {
+      const view = bank || {};
+      $('bankDeposit').textContent = view.depositUsd || '$1.00';
+      $('bankBalance').textContent = view.balanceUsd || '$0.00';
+      if (view.depositChain) {
+        const text = view.address
+          ? 'Send $1.00 USDC on ' + view.depositChain + ' to this treasury. Claim pays you on ' + view.depositChain + '.'
+          : view.depositChain + ' has no treasury yet. Deposit USDC on Base or Optimism. Claim on ' + view.depositChain + ' is sent over CCIP.';
+        $('bankHint').textContent = text;
+        $('depositHint').textContent = text;
+      }
+      if (view.address) {
+        $('bankAddress').textContent = view.address;
+        $('setupAddress').textContent = view.address;
+      }
+      const line = view.transfer && view.transfer.line;
+      $('bankTransfer').style.display = line ? '' : 'none';
+      $('bankTransfer').textContent = line || '';
+      const note = view.note || '';
+      $('bankNote').style.display = note ? '' : 'none';
+      $('bankNote').textContent = note;
+      $('claimBalance').disabled = !view.canClaim;
+      $('claimBalance').textContent = view.claimLabel || 'Claim';
+      const funded = !!view.canPlay;
+      $('playFlappy').disabled = !funded;
+      $('next').disabled = !funded;
+      if (!funded) {
+        $('playFlappy').textContent = 'Deposit $1.00 to play';
+        $('next').textContent = 'Deposit $1.00 to play';
+      } else {
+        $('playFlappy').textContent = 'Play flappy';
+        if ($('next').textContent === 'Deposit $1.00 to play') $('next').textContent = 'Play';
+      }
+    }
+
     function applyPrefs(next) {
       prefs = next;
       document.querySelectorAll('[data-game]').forEach((el) => {
@@ -403,6 +522,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       $('multiplayer').checked = !!prefs.multiplayer;
       if (document.activeElement !== $('wallet')) $('wallet').value = prefs.wallet || '';
       if (prefs.chainId) $('chain').value = String(prefs.chainId);
+      paintDeposit();
       $('app').style.display = prefs.onboarded ? '' : 'none';
       $('savePrefs').textContent = prefs.onboarded ? 'Save' : 'Continue';
     }
@@ -426,6 +546,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         $('claim').disabled = !c.canClaim;
         $('claim').textContent = c.claimLabel || 'Claim';
         renderLedger(Array.isArray(c.ledger) ? c.ledger : []);
+        return;
+      }
+      if (msg.type === 'bank') {
+        applyBank(msg.bank);
         return;
       }
       if (msg.type === 'prefsError') {

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { matchSummary } from "../board.js";
+import { legalUci, matchSummary, toUci } from "../board.js";
 import { renderSnake } from "../snake-board.js";
 import { SessionClient } from "../session.js";
 import type { ChessState, HostKind, ServerMessage, SnakeDir, SnakeState } from "../types.js";
@@ -58,6 +58,41 @@ export async function createSessionMcpServer(opts: McpServerOptions) {
   );
 
   server.tool(
+    "session_set_player",
+    "Save the wallet and the chain you deposit and claim on. Deposit USDC to the treasury on that chain. A chain without a treasury is paid over CCIP.",
+    {
+      wallet: z.string().describe("0x wallet address"),
+      chainId: z.number().int().describe("Payout chain: 1 Ethereum, 8453 Base, 42161 Arbitrum, 10 Optimism, 137 Polygon"),
+    },
+    async ({ wallet, chainId }) => {
+      if (!/^0x[a-fA-F0-9]{40}$/.test(wallet)) throw new Error("Enter a 0x wallet address.");
+      const payout = new Set([1, 8453, 42161, 10, 137]);
+      if (!payout.has(chainId)) {
+        throw new Error("Deposit and claim USDC on Ethereum, Base, Arbitrum, Optimism, or Polygon. Base and Optimism have treasuries. The others are paid over CCIP. Sepolia is not a play chain.");
+      }
+      await session.setPlayer(wallet as `0x${string}`, chainId);
+      return json({ me: session.me(), bank: session.relay.bank });
+    },
+  );
+
+  server.tool(
+    "session_sync_deposit",
+    "Read a USDC transfer into the play balance on the chain they picked. Play stays closed until that balance covers $0.05.",
+    {},
+    async () => {
+      const msg = await session.relay.syncDepositAsync();
+      return json({ bank: msg.type === "bank" ? msg.bank : session.relay.bank });
+    },
+  );
+
+  server.tool(
+    "session_claim",
+    "Send the play balance to the saved wallet on the chain they picked.",
+    {},
+    async () => json(await session.relay.claimBalanceAsync()),
+  );
+
+  server.tool(
     "session_peers",
     "List live peers from the lobby. Nearby peers (same Wi-Fi via mDNS) are flagged.",
     {},
@@ -103,7 +138,43 @@ export async function createSessionMcpServer(opts: McpServerOptions) {
     {},
     async () => {
       const poll = session.poll();
-      return withBoards(poll, poll.match, poll.snake);
+      return withBoards(
+        {
+          ...poll,
+          snakeBoard: poll.snake ? renderSnake(poll.snake) : null,
+        },
+        poll.match,
+        poll.snake,
+      );
+    },
+  );
+
+  server.tool(
+    "session_next",
+    "Enter the chess pairing queue. The first player waits. When another player also enters, the relay starts a match immediately. A call during a live match resigns that match.",
+    {},
+    async () => {
+      await session.relay.nextAsync();
+      const match = session.match();
+      let legalMoves: string[] = [];
+      if (match && match.status !== "finished") {
+        try {
+          legalMoves = legalUci(match.fen);
+        } catch {
+          legalMoves = [];
+        }
+      }
+      return withBoards(
+        {
+          seeking: session.relay.seeking,
+          waiting: session.relay.waiting,
+          drawing: session.relay.drawing,
+          match,
+          legalMoves,
+        },
+        match,
+        null,
+      );
     },
   );
 
@@ -133,6 +204,29 @@ export async function createSessionMcpServer(opts: McpServerOptions) {
     async ({ challengeId, accept }) => {
       const msg = await session.relay.respondChallengeAsync(challengeId, accept);
       return json(msg, boardFromMessage(msg));
+    },
+  );
+
+  server.tool(
+    "session_flappy_join",
+    "Enter the flappy pairing queue. The first player waits. When another player also enters, both fly the same course on their own machines. The relay only compares the final scores.",
+    {},
+    async () => {
+      const msg = await session.relay.flappyJoinAsync();
+      return json({ flappy: msg.type === "flappy" ? msg.flappy : null });
+    },
+  );
+
+  server.tool(
+    "session_flappy_score",
+    "Report this player's finished flappy score. The relay compares it with the other player's score once both have finished.",
+    {
+      contestId: z.string(),
+      score: z.number().int().nonnegative(),
+    },
+    async ({ contestId, score }) => {
+      const msg = await session.relay.flappyScoreAsync(contestId, score);
+      return json({ flappy: msg.type === "flappy" ? msg.flappy : null });
     },
   );
 
@@ -182,13 +276,15 @@ export async function createSessionMcpServer(opts: McpServerOptions) {
 
   server.tool(
     "session_move",
-    "Play a chess move in UCI form (e.g. e2e4). Returns the updated board for the IDE — do not open external links.",
+    "Play a chess move as SAN (e4, Nf3, O-O, e8=Q) or UCI (e2e4, e7e8q). Returns the updated board.",
     {
       matchId: z.string(),
-      uci: z.string().describe("UCI move like e2e4 or e7e8q"),
+      uci: z.string().describe("SAN or UCI move, such as e4 or e2e4"),
     },
     async ({ matchId, uci }) => {
-      const msg = await session.relay.moveAsync(matchId, uci);
+      const fen = session.match()?.fen;
+      const normalized = fen ? toUci(fen, uci) : uci.trim();
+      const msg = await session.relay.moveAsync(matchId, normalized);
       return json(msg, boardFromMessage(msg));
     },
   );

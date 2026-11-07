@@ -1,0 +1,7 @@
+# CRE project settings. `cre workflow simulate --target base` uses the base group.
+base:
+  cre-cli:
+    don-family: "zone-a"
+  rpcs:
+    - chain-name: ethereum-mainnet-base-1
+      url: https://mainnet.base.org

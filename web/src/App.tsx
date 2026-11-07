@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Chessboard } from "react-chessboard";
 import type { ChessState, PresenceSnapshot } from "./types";
 import { Mark } from "./Mark";
-import { SnakeArena } from "./SnakeArena";
+import { FlappyTable } from "./FlappyTable";
 import { WalletPanel } from "./WalletPanel";
 
 const RELAY_HTTP = import.meta.env.VITE_RELAY_HTTP ?? "";
@@ -90,11 +90,11 @@ export function App() {
         are working.
       </h1>
       <p className="deck">
-        This is the public table. Snakes are here. Chess, puzzles, and the credit for a win stay
-        in the editor.
+        Flappy is played here. Chess and puzzles are the battle in the editor. The winner
+        gets token credits for the prompt.
       </p>
 
-      <SnakeArena />
+      <FlappyTable />
 
       <div className="ledger">
         <section>

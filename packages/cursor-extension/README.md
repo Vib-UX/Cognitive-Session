@@ -2,19 +2,19 @@
 
 P2P connect inside your agentic session.
 
-You come back to the session. Someone else takes the other one. Play them, or solve a puzzle. A win credits the prompt your agent is working on.
+User A’s agent has about 4 minutes left. User B’s has about 3. During that wait they battle inside the editor. The winner gets token credits that pay for the prompt.
 
-## Play
+## Wait
 
-Chess and snakes, between two sessions. You have the controls on yours.
+How long each agent still needs. User A has 4 minutes. User B has 3.
 
-## Puzzles
+## Battle
 
-A sudoku, a mate, a maze. Something to finish while the agent keeps going.
+Chess, flappy, or a puzzle, inside the editor, while both agents keep working.
 
-## Credit
+## Credits
 
-A win counts only while the agent is working. Claim it when that turn finishes.
+The winner gets token credits. Those credits pay for the prompt.
 
 ## Settings
 

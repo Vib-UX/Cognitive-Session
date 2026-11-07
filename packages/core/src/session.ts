@@ -1,4 +1,5 @@
 import { ArkivLobby } from "./arkiv.js";
+import { legalUci } from "./board.js";
 import { attachLocalEns } from "./ens-local.js";
 import { loadOrCreateIdentity, saveIdentity } from "./identity.js";
 import { NearbyDiscovery } from "./mdns.js";
@@ -127,16 +128,37 @@ export class SessionClient {
 
   poll() {
     this.relay.poll();
+    const match = this.match();
+    let legalMoves: string[] = [];
+    if (match && match.status !== "finished") {
+      try {
+        legalMoves = legalUci(match.fen);
+      } catch {
+        legalMoves = [];
+      }
+    }
     return {
       me: this.identity,
       peers: this.peers(),
       room: this.room(),
       pings: this.pings(),
-      match: this.match(),
+      match,
       snake: this.snake(),
       challenges: this.challenges(),
       nearby: this.nearby.list(),
+      seeking: this.relay.seeking,
+      waiting: this.relay.waiting,
+      drawing: this.relay.drawing,
+      legalMoves,
+      flappy: this.relay.flappy,
+      bank: this.relay.bank,
     };
+  }
+
+  /** Chain for the deposit and the claim. A treasury on that chain pays directly. The others are CCIP. */
+  async setPlayer(wallet: `0x${string}`, chainId: number): Promise<void> {
+    await this.relay.setPlayer(wallet, chainId);
+    saveIdentity(this.identity);
   }
 
   setEnsName(ensName: string): void {

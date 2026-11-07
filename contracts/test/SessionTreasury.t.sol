@@ -19,13 +19,13 @@ contract SessionTreasuryTest is Test {
         router = new MockRouter();
         router.setFee(0.001 ether);
         usdc = new MockERC20();
-        treasury = new SessionTreasury(address(router), address(usdc));
+        treasury = new SessionTreasury(address(router), address(usdc), 15_971_525_489_660_198_786, new uint64[](0));
         usdc.mint(address(treasury), 10_000_000);
         vm.deal(address(this), 1 ether);
     }
 
     function testPaysOnBaseWithoutCcip() public {
-        treasury.sendReward(treasury.BASE_SELECTOR(), recipient, 750_000, "");
+        treasury.sendReward(treasury.homeSelector(), recipient, 750_000, "");
         assertEq(usdc.balanceOf(recipient), 750_000);
         assertEq(usdc.balanceOf(address(treasury)), 10_000_000 - 750_000);
         assertEq(router.lastMessageId(), bytes32(0));

@@ -3,14 +3,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 
-export const GAME_IDS = ["chess", "snakes", "sudoku", "maths", "mate"] as const;
+export const GAME_IDS = ["chess", "flappy", "sudoku", "maths", "mate"] as const;
 export type GameId = (typeof GAME_IDS)[number];
 
 export const EVM_CHAINS = [
-  { id: 84532, name: "Base Sepolia" },
-  { id: 11155111, name: "Ethereum Sepolia" },
-  { id: 1, name: "Ethereum" },
   { id: 8453, name: "Base" },
+  { id: 1, name: "Ethereum" },
   { id: 42161, name: "Arbitrum" },
   { id: 10, name: "Optimism" },
   { id: 137, name: "Polygon" },
@@ -70,9 +68,10 @@ export class PrefsStore {
 }
 
 function normalize(raw: Partial<SessionPrefs> | undefined): SessionPrefs {
-  const picked = (raw?.games ?? ["chess"]).filter((game): game is GameId =>
-    (GAME_IDS as readonly string[]).includes(game),
-  );
+  const incoming = (raw?.games ?? ["chess"]) as readonly string[];
+  const picked = incoming
+    .map((game) => (game === "snakes" ? "flappy" : game))
+    .filter((game): game is GameId => (GAME_IDS as readonly string[]).includes(game));
   const games = [...new Set(picked)];
   const multiplayer = raw?.multiplayer !== false;
   if (multiplayer && !games.includes("chess")) games.unshift("chess");
@@ -80,7 +79,7 @@ function normalize(raw: Partial<SessionPrefs> | undefined): SessionPrefs {
   const wallet = typeof raw?.wallet === "string" ? raw.wallet.trim() : "";
   const chainId = EVM_CHAINS.some((chain) => chain.id === raw?.chainId)
     ? (raw!.chainId as EvmChainId)
-    : 84532;
+    : 8453;
   const validWallet = isEvmAddress(wallet);
   return {
     onboarded: Boolean(raw?.onboarded) && validWallet,

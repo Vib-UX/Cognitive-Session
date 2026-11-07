@@ -22,7 +22,7 @@ contract SessionTreasurySimulatorTest is Test {
             BurnMintERC677Helper bnM,
         ) = simulator.configuration();
 
-        SessionTreasury treasury = new SessionTreasury(address(sourceRouter), address(bnM));
+        SessionTreasury treasury = new SessionTreasury(address(sourceRouter), address(bnM), 1, new uint64[](0));
         treasury.setLane(chainSelector, true);
         bnM.drip(address(treasury));
 

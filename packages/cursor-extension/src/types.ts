@@ -82,6 +82,40 @@ export interface SnakeState {
   };
 }
 
+export interface FlappyView {
+  id: string;
+  seed: number;
+  status: "waiting" | "playing" | "done";
+  seeking: boolean;
+  you: number | null;
+  them: number | null;
+  themName: string | null;
+  winner: "you" | "them" | "draw" | null;
+  stake?: string | null;
+}
+
+export interface StakeTransfer {
+  id: string;
+  you: "won" | "lost" | "short";
+  fromChain: string;
+  toChain: string;
+  line: string;
+}
+
+export interface BankView {
+  depositUsd: string;
+  stakeUsd: string;
+  balanceUsd: string;
+  balance: string;
+  address: string;
+  depositChain: string;
+  canClaim: boolean;
+  canPlay?: boolean;
+  claimLabel: string;
+  transfer: StakeTransfer | null;
+  note: string;
+}
+
 export interface ChallengeInfo {
   id: string;
   from: SessionId;
@@ -101,8 +135,10 @@ export type ServerMessage =
   | { type: "challenge_resolved"; challengeId: string; accepted: boolean; match?: ChessState }
   | { type: "match"; match: ChessState }
   | { type: "queue"; seeking: boolean; waiting: number; drawing?: boolean }
-  | { type: "error"; message: string; scope?: "reward" }
+  | { type: "error"; message: string; scope?: "reward" | "bank" }
   | { type: "reward"; txHash: string; chainId: number; amount: string; chainName: string }
+  | { type: "bank"; bank: BankView }
+  | { type: "bank_paid"; txHash: string; chainName: string; usd: string }
   | {
       type: "poll_state";
       peers: PeerInfo[];
@@ -111,8 +147,10 @@ export type ServerMessage =
       match: ChessState | null;
       challenges: ChallengeInfo[];
       snake?: SnakeState | null;
+      flappy?: FlappyView | null;
     }
-  | { type: "snake"; match: SnakeState };
+  | { type: "snake"; match: SnakeState }
+  | { type: "flappy"; flappy: FlappyView };
 
 export interface UiState {
   connected: boolean;
@@ -122,6 +160,7 @@ export interface UiState {
   pings: PingMessage[];
   match: ChessState | null;
   snake: SnakeState | null;
+  flappy: FlappyView | null;
   challenges: ChallengeInfo[];
   error: string | null;
   /** This window pressed Next and is waiting for a partner or a draw. */

@@ -8,6 +8,8 @@ import type {
   RoomInfo,
   ServerMessage,
   SessionIdentity,
+  FlappyView,
+  BankView,
   SnakeDir,
   SnakeState,
 } from "./types.js";
@@ -31,7 +33,12 @@ export class RelayClient {
   pings: PingMessage[] = [];
   match: ChessState | null = null;
   snake: SnakeState | null = null;
+  flappy: FlappyView | null = null;
+  bank: BankView | null = null;
   challenges: ChallengeInfo[] = [];
+  seeking = false;
+  waiting = 0;
+  drawing = false;
   connected = false;
 
   constructor(
@@ -157,8 +164,19 @@ export class RelayClient {
       case "match":
         this.match = msg.match;
         break;
+      case "queue":
+        this.seeking = msg.seeking;
+        this.waiting = msg.waiting;
+        this.drawing = Boolean(msg.drawing);
+        break;
       case "snake":
         this.snake = msg.match;
+        break;
+      case "flappy":
+        this.flappy = msg.flappy;
+        break;
+      case "bank":
+        this.bank = msg.bank;
         break;
       case "poll_state":
         this.peers = msg.peers;
@@ -166,6 +184,7 @@ export class RelayClient {
         this.pings = msg.pings;
         this.match = msg.match;
         this.snake = msg.snake ?? null;
+        this.flappy = msg.flappy ?? null;
         this.challenges = msg.challenges;
         break;
       default:
@@ -252,6 +271,51 @@ export class RelayClient {
 
   poll(): void {
     this.send({ type: "poll" });
+  }
+
+  /** Wallet that receives a claim, and the mainnet chain Claim pays on. */
+  setPlayer(wallet: `0x${string}`, chainId: number) {
+    this.identity.walletAddress = wallet;
+    this.identity.chainId = chainId;
+    return this.request("welcome", () => this.send({ type: "hello", identity: this.identity }));
+  }
+
+  syncDepositAsync() {
+    return this.request("bank", () => this.send({ type: "sync_deposit" }), 20000);
+  }
+
+  claimBalanceAsync() {
+    return this.request("bank_paid", () => this.send({ type: "claim_balance" }), 60000);
+  }
+
+  /** Join the pairing queue. The relay replies with `queue`, and with `match` when someone is already waiting. */
+  next(): void {
+    this.send({ type: "next" });
+  }
+
+  nextAsync(): Promise<ServerMessage> {
+    return this.request("queue", () => this.next());
+  }
+
+  flappyJoin(): void {
+    this.send({ type: "flappy_join" });
+  }
+
+  flappyJoinAsync(): Promise<ServerMessage> {
+    return this.request("flappy", () => this.flappyJoin());
+  }
+
+  flappyScore(contestId: string, score: number): void {
+    this.send({ type: "flappy_score", contestId, score });
+  }
+
+  flappyScoreAsync(contestId: string, score: number): Promise<ServerMessage> {
+    return this.request(
+      "flappy",
+      () => this.flappyScore(contestId, score),
+      8000,
+      (msg) => msg.type === "flappy" && msg.flappy.id === contestId && msg.flappy.you === score,
+    );
   }
 
   snakeJoin(code?: string): void {

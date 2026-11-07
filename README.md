@@ -31,7 +31,7 @@ SESSION_HOST=claude SESSION_DISPLAY_NAME=bob SESSION_DATA_DIR=/tmp/session-b \
 Or load the plugins:
 
 - Cursor: [packages/cursor-plugin](packages/cursor-plugin)
-- Claude Code: `claude --plugin-dir ./packages/claude-mod` then `/session`
+- Claude Code: `claude --plugin-dir ./packages/claude-mod`, then `/session`
 
 ## Step 1 demo
 
@@ -44,9 +44,13 @@ Optional judge view: `pnpm --filter @session/web dev` lists presence only. It is
 
 ## Chess (in-IDE)
 
-Chess is played inside Cursor / Claude Code — no external board link.
+Chess is played inside Cursor / Claude Code. The relay connects the two players. There is no external board.
 
-`session_challenge` → `session_respond` → `session_move` (UCI, e.g. `e2e4`). Tool replies and the Claude Board tab show a unicode board. Clocks are 5 minutes. The Cursor stop hook and Claude `prompt.submit` nudge the agent when a turn is waiting.
+Claude Code: `/session`, pick Chess or Flappy, then each person prompts. The first prompt waits. The other player's prompt starts the round. Flappy runs on each machine and the relay compares the final scores. The person plays. The agent does not move. `/session stop` closes the pane and leaves the game on the relay.
+
+Cursor still pairs from a prompt through the same relay queue, and can also `session_challenge` → `session_respond` → `session_move` (UCI, e.g. `e2e4`). Clocks are 5 minutes. The Cursor stop hook nudges the agent when a turn is waiting.
+
+Check the Claude hooks with `claude plugin validate ./packages/claude-mod`.
 
 ## Contracts
 
@@ -59,7 +63,7 @@ forge script script/DeployLocal.s.sol --broadcast   # mock CCIP router
 - `SessionLock` — Base Sepolia deposits + CCIP send
 - `SessionPayout` — Ethereum Sepolia receive + pay winner / split draw
 - `SessionNameRegistry` — ENSv2-style permissioned subnames under `session.eth`
-- `SessionTreasury` — Base mainnet USDC. Same-chain transfer on Base, CCIP 2.0 to Ethereum, Arbitrum, Optimism, and Polygon
+- `SessionTreasury` — USDC on Base and Optimism. Same-chain transfer on the chain where it is deployed, CCIP 2.0 to the other mainnets
 
 Set `VITE_SESSION_LOCK_ADDRESS` / `VITE_SESSION_PAYOUT_ADDRESS` for the web wallet panel.
 
@@ -72,18 +76,21 @@ A claim asks that relay to pay USDC from the Base treasury. The relay holds the 
 ```
 TREASURY_PRIVATE_KEY=
 SESSION_TREASURY_ADDRESS=0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c
+SESSION_TREASURY_OPTIMISM=0x2aa139d40b57560EE8bAa94325cfdc5a7721DE3f
 BASE_RPC_URL=https://mainnet.base.org
+OPTIMISM_RPC_URL=https://mainnet.optimism.io
 TREASURY_MAX_UNITS=3000000
 ```
 
 `TREASURY_MAX_UNITS` is 3 USDC per wallet per UTC day. Local development still uses `pnpm --filter @session/relay start`.
 
-## Base USDC treasury
+## USDC treasuries
 
-[SessionTreasury](https://basescan.org/address/0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c) is deployed on Base mainnet. CCIP delivers the tokens to the wallet address in the message, so there is no separate receiver contract.
+[SessionTreasury on Base](https://basescan.org/address/0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c) pays USDC directly on Base. [SessionTreasury on Optimism](https://optimistic.etherscan.io/address/0x2aa139d40b57560EE8bAa94325cfdc5a7721DE3f) pays USDC directly on Optimism. A player deposits USDC on the chain they pick. CCIP delivers a claim when that chain's treasury is not the one holding the tokens.
 
-- Deploy: https://basescan.org/tx/0x593afe3bcb37b3367a5045c840f3f32b015733831b10a8450713ec44ce1195e0
-- Fund 0.059594 USDC: https://basescan.org/tx/0x9694d417ea982d7cef82bddf2e78d3940eddf9ec415c3df0ccc9998487b045ad
+- Base deploy: https://basescan.org/tx/0x593afe3bcb37b3367a5045c840f3f32b015733831b10a8450713ec44ce1195e0
+- Optimism deploy: https://optimistic.etherscan.io/tx/0xc901823f99f1c32f3b72af36792e69c9afc1d29c2a964f6644c9a800f5946a57
+- Fund 0.059594 USDC on Base: https://basescan.org/tx/0x9694d417ea982d7cef82bddf2e78d3940eddf9ec415c3df0ccc9998487b045ad
 - Send 0.05 USDC to the owner wallet on Optimism: https://basescan.org/tx/0x6454caca63b294101920e33a01b628910e54e0dc171719f30af43e54c12a4696
 - CCIP message: https://ccip.chain.link/msg/0xffa95e81e2a89a55f2f9352e7930f07c97157646558135c5000d420e81cf915d
 

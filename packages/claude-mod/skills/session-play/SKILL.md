@@ -1,18 +1,19 @@
 ---
 name: session-play
-description: Find another live coding session, join a room, ping to prove the connection, and play chess turns inside Claude Code between build steps.
+description: Open the Session pane so two people can play chess or flappy. Flappy runs on each machine and the relay compares the final scores.
 ---
 
 # Session play
 
-Use the Session MCP tools and the `/session` pane. Chess is played in this IDE — the pane Board tab and tool replies show the board. Do not open external links to play.
+The person plays. You do not.
 
-1. `session_me` — your id
-2. `session_peers` — lobby (nearby = same Wi-Fi)
-3. `session_create_room` / `session_join_room` — pair with a specific person
-4. `session_ping` — prove the connection
-5. `session_poll` — challenges, match, board
-6. Chess: `session_challenge`, `session_respond`, `session_move`, `session_resign`
-7. Snakes: `session_snake_join` (optional `code`; omit it to share the open arena), then `session_snake_steer` (`up` / `down` / `left` / `right`, optional `boost`). The relay moves the arena. Highest score after 90 seconds wins. `session_snake_leave` exits.
+`/session` opens the pane. Deposit $1.00 USDC on the chain you pick, to that chain's treasury, before Chess or Flappy will start. Claim pays you on that same chain. Base and Optimism have treasuries. Ethereum, Arbitrum, and Polygon claims are sent over CCIP. Sepolia is not a play chain. A prompt from each person starts the selected game. The relay pairs the two players. Do not send them to a browser.
 
-Keep building as the main task. Handle chess only when a challenge or turn is waiting. Steer a snake when the user asked to play.
+1. Tell them to run `/session`, enter their wallet, and send $1.00 USDC on the chain they pick to the treasury address in the pane. Check deposit. Play stays closed until that balance is there.
+2. The chain buttons are where they deposit and where Claim pays: Base, Ethereum, Arbitrum, Optimism, or Polygon. Base and Optimism have treasuries. A claim on the others is sent over CCIP from the treasury that holds the USDC.
+3. Chess starts when each person prompts. The first prompt waits. The other person's prompt starts the battle. Do not call `session_next`.
+4. Flappy starts the same way. Each person flies on their own machine. The relay only hears the final score and says who scored higher. Do not call `session_flappy_join` or `session_flappy_score`.
+5. Moves and resign happen on the pane. Do not call `session_move` or `session_resign`.
+6. `session_me`, `session_peers`, and `session_poll` are only for when the person asks what the lobby looks like.
+
+Keep building. The pane keeps the game.

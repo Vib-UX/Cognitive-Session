@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": ".cursor/hooks/prompt-puzzle.js"
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/agent-stop.js"
+      }
+    ]
+  }
+}

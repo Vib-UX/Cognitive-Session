@@ -7,7 +7,7 @@ import {
   type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { base } from "viem/chains";
+import { evmChain, treasuryHomes, type TreasuryHome } from "./chains.js";
 
 /** CCIP chain selectors. Base pays in place; the others are CCIP 2.0 lanes from Base. */
 export const MAINNET_LANES = {
@@ -47,7 +47,37 @@ const TREASURY_ABI = [
   },
 ] as const;
 
-const spent = new Map<string, { day: string; units: bigint }>();
+const BALANCE_ABI = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+] as const;
+
+function clientChain(chainId: number) {
+  return evmChain(chainId);
+}
+
+async function usdcBalance(home: TreasuryHome): Promise<bigint> {
+  const client = createPublicClient({ chain: clientChain(home.chainId), transport: http(home.rpc) });
+  return client.readContract({
+    address: home.usdc,
+    abi: BALANCE_ABI,
+    functionName: "balanceOf",
+    args: [home.address],
+  });
+}
+
+/** Prefer the treasury on the chain they asked for. Otherwise CCIP from a treasury that holds the USDC. */
+export function choosePayout(destChainId: number, funded: { chainId: number; balance: bigint }[], amount: bigint): number | null {
+  const local = funded.find((row) => row.chainId === destChainId && row.balance >= amount);
+  if (local) return local.chainId;
+  const remote = funded.find((row) => row.balance >= amount);
+  return remote ? remote.chainId : null;
+}
 
 export function laneForChain(chainId: number) {
   if (!Object.prototype.hasOwnProperty.call(MAINNET_LANES, chainId)) return null;
@@ -70,6 +100,8 @@ export function centsToUsdc(cents: number): bigint {
 export function extraArgsV3(): Hex {
   return "0xa69dd4aa00000000000000000000000000000000";
 }
+
+const spent = new Map<string, { day: string; units: bigint }>();
 
 function maxUnits(): bigint {
   const raw = process.env.TREASURY_MAX_UNITS?.trim();
@@ -103,7 +135,7 @@ function reserve(wallet: string, amount: bigint): () => void {
 }
 
 export function treasuryConfigured(): boolean {
-  return Boolean(process.env.TREASURY_PRIVATE_KEY?.trim() && process.env.SESSION_TREASURY_ADDRESS?.trim());
+  return Boolean(process.env.TREASURY_PRIVATE_KEY?.trim() && treasuryHomes().length > 0);
 }
 
 export async function payReward(input: {
@@ -120,24 +152,35 @@ export async function payReward(input: {
     throw new Error("Rewards pay USDC on Ethereum, Base, Arbitrum, Optimism, or Polygon");
   }
 
+  const homes = treasuryHomes();
+  const funded = [];
+  for (const home of homes) {
+    funded.push({ chainId: home.chainId, balance: await usdcBalance(home) });
+  }
+  const sourceId = choosePayout(input.chainId, funded, input.amount);
+  const source = homes.find((home) => home.chainId === sourceId);
+  if (!source) {
+    throw new Error("The treasuries do not hold enough USDC on one chain to pay this claim.");
+  }
+
   const release = reserve(input.wallet, input.amount);
   try {
     const rawKey = process.env.TREASURY_PRIVATE_KEY!.trim();
     const account = privateKeyToAccount((rawKey.startsWith("0x") ? rawKey : `0x${rawKey}`) as Hex);
-    const treasury = process.env.SESSION_TREASURY_ADDRESS!.trim() as Address;
-    const transport = http(process.env.BASE_RPC_URL?.trim() || "https://mainnet.base.org");
-    const publicClient = createPublicClient({ chain: base, transport });
-    const walletClient = createWalletClient({ account, chain: base, transport });
+    const chain = clientChain(source.chainId);
+    const transport = http(source.rpc);
+    const publicClient = createPublicClient({ chain, transport });
+    const walletClient = createWalletClient({ account, chain, transport });
     const extraArgs = extraArgsV3();
     const recipient = input.wallet as Address;
     const fee = await publicClient.readContract({
-      address: treasury,
+      address: source.address,
       abi: TREASURY_ABI,
       functionName: "quote",
       args: [lane.selector, recipient, input.amount, extraArgs],
     });
     const txHash = await walletClient.writeContract({
-      address: treasury,
+      address: source.address,
       abi: TREASURY_ABI,
       functionName: "sendReward",
       args: [lane.selector, recipient, input.amount, extraArgs],

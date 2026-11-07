@@ -12,6 +12,8 @@ import type {
   ServerMessage,
   SessionIdentity,
   SessionId,
+  FlappyView,
+  BankView,
   SnakeDir,
   SnakeState,
   UiState,
@@ -53,6 +55,7 @@ export class RelayBridge {
   private ws: WebSocket | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private listeners = new Set<Listener>();
+  private bankListeners = new Set<(view: BankView) => void>();
   private intentionalClose = false;
 
   me: SessionIdentity;
@@ -62,6 +65,8 @@ export class RelayBridge {
   pings: PingMessage[] = [];
   match: ChessState | null = null;
   snake: SnakeState | null = null;
+  flappy: FlappyView | null = null;
+  bank: BankView | null = null;
   challenges: ChallengeInfo[] = [];
   error: string | null = null;
   seeking = false;
@@ -88,6 +93,7 @@ export class RelayBridge {
       pings: this.pings,
       match: this.match,
       snake: this.snake,
+      flappy: this.flappy,
       challenges: this.challenges,
       error: this.error,
       seeking: this.seeking,
@@ -100,6 +106,12 @@ export class RelayBridge {
     this.listeners.add(fn);
     fn(this.state);
     return () => this.listeners.delete(fn);
+  }
+
+  onBank(fn: (view: BankView) => void): () => void {
+    this.bankListeners.add(fn);
+    if (this.bank) fn(this.bank);
+    return () => this.bankListeners.delete(fn);
   }
 
   private emit(kind?: "snake") {
@@ -210,6 +222,7 @@ export class RelayBridge {
         this.room = msg.room;
         this.seeking = false;
         this.waiting = msg.peers.filter((p) => p.waiting).length;
+        this.poll();
         break;
       case "peers":
         this.peers = msg.peers;
@@ -242,6 +255,20 @@ export class RelayBridge {
         this.snake = msg.match;
         this.emit("snake");
         return;
+      case "flappy":
+        this.flappy = msg.flappy;
+        break;
+      case "bank":
+        this.bank = msg.bank;
+        for (const fn of this.bankListeners) fn(msg.bank);
+        break;
+      case "bank_paid":
+        if (this.pendingClaim) {
+          const pending = this.pendingClaim;
+          this.pendingClaim = null;
+          pending.onPaid(msg.usd, msg.chainName);
+        }
+        break;
       case "queue":
         this.seeking = msg.seeking;
         this.waiting = msg.waiting;
@@ -253,10 +280,17 @@ export class RelayBridge {
         this.pings = msg.pings;
         this.match = msg.match;
         this.snake = msg.snake ?? null;
+        this.flappy = msg.flappy ?? this.flappy;
         this.challenges = msg.challenges;
         if (msg.match && msg.match.status !== "finished") this.drawing = false;
         break;
       case "error":
+        if (msg.scope === "bank") {
+          const pending = this.pendingClaim;
+          this.pendingClaim = null;
+          pending?.onError(msg.message);
+          return;
+        }
         this.error = msg.message;
         if (this.pendingReward && (msg.scope === "reward" || msg.message === "Unknown message type")) {
           const pending = this.pendingReward;
@@ -280,6 +314,11 @@ export class RelayBridge {
     onError: (message: string) => void;
   } | null = null;
 
+  private pendingClaim: {
+    onPaid: (usd: string, chainName: string) => void;
+    onError: (message: string) => void;
+  } | null = null;
+
   claimReward(
     amount: string,
     hooks: { onReward: (txHash: string, chainName: string) => void; onError: (message: string) => void },
@@ -290,6 +329,22 @@ export class RelayBridge {
     }
     this.pendingReward = hooks;
     this.send({ type: "claim_reward", amount });
+  }
+
+  /** Ask the relay to read a USDC transfer into the play balance. */
+  syncDeposit(): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.send({ type: "sync_deposit" });
+    return true;
+  }
+
+  claimBalance(hooks: { onPaid: (usd: string, chainName: string) => void; onError: (message: string) => void }) {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      hooks.onError("Relay is disconnected");
+      return;
+    }
+    this.pendingClaim = hooks;
+    this.send({ type: "claim_balance" });
   }
 
   createRoom() {
@@ -332,6 +387,17 @@ export class RelayBridge {
 
   poll() {
     this.send({ type: "poll" });
+  }
+
+  /** Pair with whoever is waiting to fly. The relay compares the two scores. */
+  flappyJoin() {
+    this.error = null;
+    this.send({ type: "flappy_join" });
+  }
+
+  flappyScore(contestId: string, score: number) {
+    const points = Math.max(0, Math.floor(score));
+    this.send({ type: "flappy_score", contestId, score: points });
   }
 
   /**

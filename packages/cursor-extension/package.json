@@ -1,8 +1,8 @@
 {
   "name": "session-ide",
   "displayName": "Session",
-  "description": "P2P connect inside your agentic session. Play the other session, or solve a puzzle. A win credits the prompt your agent is working on.",
-  "version": "0.1.1",
+  "description": "P2P connect inside your agentic session. User A and User B battle in the editor while their agents work. The winner gets token credits for the prompt.",
+  "version": "0.1.2",
   "publisher": "session",
   "license": "MIT",
   "icon": "media/icon.png",

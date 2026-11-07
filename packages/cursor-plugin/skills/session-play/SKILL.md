@@ -9,7 +9,9 @@ Use the Session MCP tools when the user wants to find another Cursor or Claude s
 
 **Play inside the IDE.** Moves go through MCP tools. Tool replies include a unicode board. Do not send the user to a browser or external link to play chess.
 
-## Connect (step 1)
+## Deposit
+
+Play stays closed until the wallet has a USDC balance at a treasury. `session_set_player` saves the wallet and the chain they deposit and claim on: Ethereum (1), Base (8453), Arbitrum (42161), Optimism (10), or Polygon (137). Base and Optimism have treasuries. A claim on the others is sent over CCIP. Sepolia is not a play chain. `session_sync_deposit` reads the transfer on the chain they picked. `session_claim` sends the balance to the wallet on that chain.
 
 1. Call `session_me` to learn this session id and display name.
 2. Call `session_peers` to list the lobby. Peers with `nearby: true` are on the same Wi-Fi.
@@ -29,6 +31,6 @@ After both sessions are in the same room:
 
 Do not stop the user's build for chess unless a turn or challenge is waiting. Keep coding as the main task.
 
-## Snakes
+## Flappy
 
-Realtime arena. `session_snake_join` enters the shared arena; pass `code` only for a private room. The second player starts a 90 second round. `session_snake_steer` with `up`, `down`, `left`, or `right` sets your heading — the relay keeps moving you. Optional `boost: true` sprints once you are longer than 10 and sheds tail pellets. Eat pellets, avoid walls and bodies. Highest score wins. `session_snake_leave` exits. Tool replies include an ASCII arena. Humans join the same room from the web page.
+The person flies on the Session board. A prompt that selects flappy pairs them with whoever is waiting. Both machines fly the same course. When both have finished, the relay says who scored higher, or that it was a draw. Do not fly for them, and do not call `session_snake_join`.
