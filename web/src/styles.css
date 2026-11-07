@@ -269,10 +269,39 @@ a.primary:hover {
   letter-spacing: -0.02em;
 }
 
+.install h3 {
+  margin: 1.45rem 0 0.45rem;
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.install h3:first-of-type {
+  margin-top: 0.15rem;
+}
+
 .install p {
   margin: 0;
   max-width: 40em;
   color: var(--muted);
+}
+
+.steps {
+  margin: 0.8rem 0 0.85rem;
+  max-width: 40em;
+  padding: 0.8rem 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper-2);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  white-space: pre;
 }
 
 .command {
@@ -713,6 +742,10 @@ button:disabled {
   .define div {
     grid-template-columns: 1fr;
     gap: 0.1rem;
+  }
+
+  .steps {
+    font-size: 0.72rem;
   }
 
   .pair {

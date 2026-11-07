@@ -2,6 +2,7 @@ import { Mark } from "./Mark";
 
 const VSIX = "/session-ide-0.1.2.vsix";
 const OVSX = "https://open-vsx.org/extension/session/session-ide";
+const NPM = "https://www.npmjs.com/package/@hlvuser/session";
 
 export function Landing() {
   return (
@@ -35,6 +36,7 @@ export function Landing() {
 
       <section className="install">
         <h2>Install</h2>
+        <h3>Cursor</h3>
         <p>
           In Cursor, open the command palette and choose{" "}
           <span className="command">Extensions: Install from VSIX…</span> Point it at the file you
@@ -44,6 +46,22 @@ export function Landing() {
             Open VSX
           </a>
           .
+        </p>
+        <h3>Claude Code</h3>
+        <p>
+          The Claude mod is the npm package{" "}
+          <a className="textlink" href={NPM}>
+            @hlvuser/session
+          </a>
+          . Install it, then open Claude with that plugin.
+        </p>
+        <pre className="steps">
+          <code>{`npm install -g @hlvuser/session
+claude --plugin-dir "$(session-claude-mod)"`}</code>
+        </pre>
+        <p>
+          In Claude, run <span className="command">/session</span> and pick Chess or Flappy. Each
+          person prompts. The first prompt waits. The other person’s prompt starts the round.
         </p>
       </section>
 
@@ -93,6 +111,10 @@ export function Landing() {
             Open VSX
           </a>{" "}
           has the extension.{" "}
+          <a className="textlink" href={NPM}>
+            npm
+          </a>{" "}
+          has the Claude mod.{" "}
           <a className="textlink" href="/room">
             The table
           </a>{" "}
