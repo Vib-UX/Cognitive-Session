@@ -245,14 +245,14 @@ export class RelayStore {
     }
     try {
       const chainId = conn.identity?.chainId ?? 8453;
-      const added = await this.bank.pull(wallet, chainId);
-      if (quiet && added === 0) return;
+      const found = await this.bank.pull(wallet, chainId);
+      if (quiet && found.added === 0) return;
       const units = this.bank.balanceOf(wallet);
-      const where = treasuryHome(chainId)?.name ?? chainLabel(chainId);
+      const where = found.chains.join(" and ") || treasuryHome(chainId)?.name || chainLabel(chainId);
       this.notes.set(
         id,
-        added > 0
-          ? `Deposit added. Balance ${formatUsdc(units)}.`
+        found.added > 0
+          ? `Deposit added on ${where}. Balance ${formatUsdc(units)}.`
           : `No new USDC yet. Send ${DEPOSIT_USD} USDC on ${where} to the treasury.`,
       );
       this.sendBank(conn);

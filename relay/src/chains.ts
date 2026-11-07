@@ -42,6 +42,19 @@ function addressFrom(envName: string, fallback: string): Address | null {
   return raw && isAddress(raw) ? raw : null;
 }
 
+/** RPCs that answer eth_getLogs. The env URL is a backup, because the public Base URL rate-limits. */
+export function rpcCandidates(chainId: number): string[] {
+  const preferred =
+    chainId === 10
+      ? ["https://mainnet.optimism.io", "https://optimism.llamarpc.com"]
+      : chainId === 1
+        ? ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com"]
+        : ["https://base-rpc.publicnode.com", "https://base.llamarpc.com"];
+  const envName = chainId === 10 ? "OPTIMISM_RPC_URL" : chainId === 1 ? "ETHEREUM_RPC_URL" : "BASE_RPC_URL";
+  const env = process.env[envName]?.trim();
+  return [...new Set([...preferred, env].filter((item): item is string => Boolean(item)))];
+}
+
 /** A chain the player can deposit on. Claim on any mainnet can still be paid from one of these. */
 export function treasuryHome(chainId: number): TreasuryHome | null {
   if (chainId === 8453) {
@@ -53,7 +66,7 @@ export function treasuryHome(chainId: number): TreasuryHome | null {
       selector: 15971525489660198786n,
       usdc: USDC[8453],
       address,
-      rpc: process.env.BASE_RPC_URL?.trim() || "https://base-rpc.publicnode.com",
+      rpc: rpcCandidates(chainId)[0],
     };
   }
   if (chainId === 10) {
@@ -65,7 +78,7 @@ export function treasuryHome(chainId: number): TreasuryHome | null {
       selector: 3734403246176062136n,
       usdc: USDC[10],
       address,
-      rpc: process.env.OPTIMISM_RPC_URL?.trim() || "https://optimism-rpc.publicnode.com",
+      rpc: rpcCandidates(chainId)[0],
     };
   }
   if (chainId === 1) {
@@ -77,7 +90,7 @@ export function treasuryHome(chainId: number): TreasuryHome | null {
       selector: 5009297550715157269n,
       usdc: USDC[1],
       address,
-      rpc: process.env.ETHEREUM_RPC_URL?.trim() || "https://ethereum-rpc.publicnode.com",
+      rpc: rpcCandidates(chainId)[0],
     };
   }
   return null;

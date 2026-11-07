@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createPublicClient, http, isAddress, parseAbiItem, type Address } from "viem";
-import { evmChain, treasuryHome } from "./chains.js";
+import { evmChain, rpcCandidates, treasuryHome, treasuryHomes } from "./chains.js";
 
 /** USDC on Base. Kept for the Base treasury address default. */
 export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const;
@@ -78,34 +78,38 @@ export async function readUsdcDeposits(wallet: Address, chainId: number): Promis
     );
   }
   const chain = evmChain(chainId);
-  try {
-    const client = createPublicClient({ chain, transport: http(home.rpc) });
-    const latest = await client.getBlockNumber();
-    const lookback = 20_000n;
-    const chunk = 1_999n;
-    let cursor = latest > lookback ? latest - lookback : 0n;
-    const rows: DepositRow[] = [];
-    while (cursor <= latest) {
-      const end = cursor + chunk > latest ? latest : cursor + chunk;
-      const logs = await client.getLogs({
-        address: home.usdc,
-        event: TRANSFER,
-        args: { from: wallet, to: home.address },
-        fromBlock: cursor,
-        toBlock: end,
-      });
-      for (const log of logs) {
-        if (!log.transactionHash || log.args.value == null) continue;
-        rows.push({ txHash: log.transactionHash, amount: log.args.value });
+  let lastDetail = "request failed";
+  for (const rpc of rpcCandidates(chainId)) {
+    try {
+      const client = createPublicClient({ chain, transport: http(rpc) });
+      const latest = await client.getBlockNumber();
+      const lookback = 20_000n;
+      const chunk = 1_999n;
+      let cursor = latest > lookback ? latest - lookback : 0n;
+      const rows: DepositRow[] = [];
+      while (cursor <= latest) {
+        const end = cursor + chunk > latest ? latest : cursor + chunk;
+        const logs = await client.getLogs({
+          address: home.usdc,
+          event: TRANSFER,
+          args: { from: wallet, to: home.address },
+          fromBlock: cursor,
+          toBlock: end,
+        });
+        for (const log of logs) {
+          if (!log.transactionHash || log.args.value == null) continue;
+          rows.push({ txHash: log.transactionHash, amount: log.args.value });
+        }
+        if (end === latest) break;
+        cursor = end + 1n;
       }
-      if (end === latest) break;
-      cursor = end + 1n;
+      return rows;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "request failed";
+      lastDetail = detail.split("\n")[0]?.slice(0, 180) || "request failed";
     }
-    return rows;
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : "request failed";
-    throw new Error(`Could not read the ${home.name} deposit (${detail}).`);
   }
+  throw new Error(`Could not read the ${home.name} deposit (${lastDetail}).`);
 }
 
 interface SavedBank {
@@ -184,13 +188,33 @@ export class PlayBank {
     this.claiming.delete(wallet.toLowerCase());
   }
 
-  async pull(wallet: Address, chainId = 8453): Promise<number> {
-    const rows = await this.readDeposits(wallet, chainId);
-    let added = 0;
-    for (const row of rows) {
-      if (this.credit(wallet, row.txHash, row.amount)) added += 1;
+  async pull(wallet: Address, chainId = 8453): Promise<{ added: number; chains: string[] }> {
+    const order = [chainId];
+    for (const home of treasuryHomes()) {
+      if (!order.includes(home.chainId)) order.push(home.chainId);
     }
-    return added;
+    let added = 0;
+    const chains: string[] = [];
+    const failures: string[] = [];
+    for (const id of order) {
+      const home = treasuryHome(id);
+      if (!home) continue;
+      try {
+        const rows = await this.readDeposits(wallet, id);
+        let found = 0;
+        for (const row of rows) {
+          if (this.credit(wallet, row.txHash, row.amount)) found += 1;
+        }
+        if (found > 0) {
+          added += found;
+          chains.push(home.name);
+        }
+      } catch (err) {
+        failures.push(err instanceof Error ? err.message : "Could not read the deposit.");
+      }
+    }
+    if (added === 0 && failures.length > 0) throw new Error(failures[0]);
+    return { added, chains };
   }
 
   private load(): void {

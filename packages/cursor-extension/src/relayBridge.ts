@@ -260,6 +260,7 @@ export class RelayBridge {
         break;
       case "bank":
         this.bank = msg.bank;
+        if (this.error === "Unknown message type") this.error = null;
         for (const fn of this.bankListeners) fn(msg.bank);
         break;
       case "bank_paid":
