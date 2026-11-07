@@ -54,6 +54,8 @@ export interface ChessState {
   lockTx?: string;
   ccipMessageId?: string;
   payoutTx?: string;
+  /** 0G Storage root hash of the finished match record. */
+  ogRoot?: string;
 }
 
 export interface RoomInfo {

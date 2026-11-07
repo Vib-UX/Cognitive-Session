@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type WebSocket from "ws";
 import { syncEntity } from "./arkiv-sync.js";
+import { storeFinishedMatch } from "./og-storage.js";
 import {
   DEPOSIT_USD,
   PlayBank,
@@ -1068,9 +1069,17 @@ export class RelayStore {
         lockTx: match.lockTx ?? null,
         ccipMessageId: match.ccipMessageId ?? null,
         payoutTx: match.payoutTx ?? null,
+        ogRoot: match.ogRoot ?? null,
         fen: match.fen,
       },
     });
+    if (match.status === "finished" && !match.ogRoot) {
+      void storeFinishedMatch(match).then((stored) => {
+        if (!stored || match.ogRoot) return;
+        match.ogRoot = stored.rootHash;
+        this.broadcastMatch(match);
+      });
+    }
   }
 
   private peerList(): PeerInfo[] {

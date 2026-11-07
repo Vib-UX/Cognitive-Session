@@ -126,6 +126,10 @@ forge test --match-contract SessionTreasury
 
 When `SESSION_ARKIV_RPC` is set, the relay upserts challenge / room / match entities. Judge notes live in [arkiv/](arkiv/).
 
+## 0G Storage
+
+When `SESSION_0G_PRIVATE_KEY` is set, the relay uploads each finished chess match as JSON (players, result, CCIP message id) through the 0G Storage indexer. The returned root hash is stored on the match as `ogRoot`. `SESSION_0G_RPC` and `SESSION_0G_INDEXER` default to the Galileo testnet RPC and the turbo indexer.
+
 ## Layout
 
 ```
@@ -158,4 +162,5 @@ pnpm --filter session-ide build
 
 - ENSv2 — session subnames
 - Arkiv — lobby / match entities
+- 0G Storage — finished match records
 - Chainlink CCIP 2.0 — Base mainnet USDC treasury, plus the Base Sepolia → Ethereum Sepolia wager. Local coverage includes Chainlink's CCIP Local Simulator.

@@ -10,8 +10,10 @@
     "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
+    "@0gfoundation/0g-storage-ts-sdk": "1.2.13",
     "chess.js": "^1.4.0",
     "cors": "^2.8.5",
+    "ethers": "6.13.1",
     "express": "^4.21.2",
     "viem": "^2.57.16",
     "ws": "^8.18.1"
