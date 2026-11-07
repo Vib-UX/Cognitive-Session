@@ -24,6 +24,32 @@ export const BASE_CCIP_TX_URL =
 
 const TRANSFER = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
 
+/** How far back a deposit check looks. Base produces blocks fast enough that a short block count misses a same-day transfer. */
+const DEPOSIT_WINDOW_SEC = 3n * 24n * 60n * 60n;
+/** Public Base RPCs reject a getLogs span much wider than this. */
+const LOG_SPAN = 49_000n;
+
+/**
+ * First block to scan for a deposit. Uses the recent block time so the window stays three days
+ * when blocks are faster than one every two seconds.
+ */
+export function depositFromBlock(
+  latest: bigint,
+  headTime: bigint,
+  sampleBlock: bigint,
+  sampleTime: bigint,
+): bigint {
+  const blockSpan = latest - sampleBlock;
+  const timeSpan = headTime - sampleTime;
+  let blocks = 400_000n;
+  if (blockSpan > 0n && timeSpan > 0n) {
+    blocks = (blockSpan * DEPOSIT_WINDOW_SEC + timeSpan - 1n) / timeSpan;
+  }
+  if (blocks < LOG_SPAN) blocks = LOG_SPAN;
+  if (blocks > 1_500_000n) blocks = 1_500_000n;
+  return latest > blocks ? latest - blocks : 0n;
+}
+
 export function depositAddress(): Address {
   const raw = process.env.SESSION_TREASURY_ADDRESS?.trim();
   if (raw && isAddress(raw)) return raw;
@@ -99,12 +125,14 @@ export async function readUsdcDeposits(wallet: Address, chainId: number): Promis
     try {
       const client = createPublicClient({ chain, transport: http(rpc) });
       const latest = await client.getBlockNumber();
-      const lookback = 20_000n;
-      const chunk = 1_999n;
-      let cursor = latest > lookback ? latest - lookback : 0n;
+      const head = await client.getBlock({ blockNumber: latest });
+      const sampleBlock = latest > 2_000n ? latest - 2_000n : 0n;
+      const sample = sampleBlock === latest ? head : await client.getBlock({ blockNumber: sampleBlock });
+      const fromBlock = depositFromBlock(latest, head.timestamp, sampleBlock, sample.timestamp);
       const rows: DepositRow[] = [];
+      let cursor = fromBlock;
       while (cursor <= latest) {
-        const end = cursor + chunk > latest ? latest : cursor + chunk;
+        const end = cursor + LOG_SPAN - 1n > latest ? latest : cursor + LOG_SPAN - 1n;
         const logs = await client.getLogs({
           address: home.usdc,
           event: TRANSFER,

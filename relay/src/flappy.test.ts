@@ -82,3 +82,30 @@ test("equal flappy scores are a draw", () => {
   assert.equal(last(ada.sent, "flappy").flappy.winner, "draw");
   assert.equal(last(bob.sent, "flappy").flappy.winner, "draw");
 });
+
+test("flappy rematch waits for the same opponent, then starts a new course", () => {
+  const store = new RelayStore();
+  const ada = fakeSocket();
+  const bob = fakeSocket();
+  store.add(ada.ws);
+  store.add(bob.ws);
+  store.handle(ada.ws, JSON.stringify({ type: "hello", identity: { id: A, displayName: "ada", host: "web" } }));
+  store.handle(bob.ws, JSON.stringify({ type: "hello", identity: { id: B, displayName: "bob", host: "cursor" } }));
+  store.handle(ada.ws, JSON.stringify({ type: "flappy_join" }));
+  store.handle(bob.ws, JSON.stringify({ type: "flappy_join" }));
+  const start = last(ada.sent, "flappy");
+  store.handle(ada.ws, JSON.stringify({ type: "flappy_score", contestId: start.flappy.id, score: 3 }));
+  store.handle(bob.ws, JSON.stringify({ type: "flappy_score", contestId: start.flappy.id, score: 1 }));
+
+  store.handle(bob.ws, JSON.stringify({ type: "rematch", game: "flappy" }));
+  assert.equal(last(ada.sent, "rematch").offer?.waiting, false);
+  assert.equal(last(ada.sent, "flappy").flappy.status, "done");
+
+  store.handle(ada.ws, JSON.stringify({ type: "rematch", game: "flappy" }));
+  const again = last(ada.sent, "flappy").flappy;
+  assert.equal(again.status, "playing");
+  assert.notEqual(again.id, start.flappy.id);
+  assert.equal(again.seed, last(bob.sent, "flappy").flappy.seed);
+  assert.equal(again.themName, "bob");
+  assert.equal(last(ada.sent, "rematch").offer, null);
+});

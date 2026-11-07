@@ -1,10 +1,13 @@
 import {
   createPublicClient,
   createWalletClient,
+  decodeEventLog,
   http,
   isAddress,
+  parseAbiItem,
   type Address,
   type Hex,
+  type TransactionReceipt,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { evmChain, treasuryHomes, type TreasuryHome } from "./chains.js";
@@ -46,6 +49,10 @@ const TREASURY_ABI = [
     outputs: [{ name: "messageId", type: "bytes32" }],
   },
 ] as const;
+
+const REWARD_SENT = parseAbiItem(
+  "event RewardSent(bytes32 indexed messageId, uint64 indexed destChainSelector, address indexed recipient, uint256 amount)",
+);
 
 const BALANCE_ABI = [
   {
@@ -138,11 +145,26 @@ export function treasuryConfigured(): boolean {
   return Boolean(process.env.TREASURY_PRIVATE_KEY?.trim() && treasuryHomes().length > 0);
 }
 
+function messageIdFrom(receipt: TransactionReceipt, treasury: Address): string | undefined {
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== treasury.toLowerCase()) continue;
+    try {
+      const decoded = decodeEventLog({ abi: [REWARD_SENT], data: log.data, topics: log.topics });
+      if (decoded.eventName !== "RewardSent") continue;
+      const id = decoded.args.messageId;
+      if (id && !/^0x0{64}$/.test(id)) return id;
+    } catch {
+      /* a different log on the same transaction */
+    }
+  }
+  return undefined;
+}
+
 export async function payReward(input: {
   wallet: string;
   chainId: number;
   amount: bigint;
-}): Promise<{ txHash: Hex; chainId: number; amount: string; chainName: string }> {
+}): Promise<{ txHash: Hex; chainId: number; amount: string; chainName: string; messageId?: string }> {
   if (!treasuryConfigured()) {
     throw new Error("Treasury is not configured on the relay");
   }
@@ -186,11 +208,19 @@ export async function payReward(input: {
       args: [lane.selector, recipient, input.amount, extraArgs],
       value: fee,
     });
+    let messageId: string | undefined;
+    try {
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      messageId = messageIdFrom(receipt, source.address);
+    } catch {
+      /* the send is already submitted; the message id can arrive later */
+    }
     return {
       txHash,
       chainId: input.chainId,
       amount: input.amount.toString(),
       chainName: lane.name,
+      messageId,
     };
   } catch (err) {
     release();

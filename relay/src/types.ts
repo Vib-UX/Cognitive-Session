@@ -147,7 +147,17 @@ export type ClientMessage =
   | { type: "snake_steer"; matchId: string; dir: SnakeDir; boost?: boolean }
   | { type: "snake_leave" }
   | { type: "flappy_join" }
-  | { type: "flappy_score"; contestId: string; score: number };
+  | { type: "flappy_score"; contestId: string; score: number }
+  | { type: "rematch"; game: "chess" | "flappy" };
+
+export interface RematchOffer {
+  game: "chess" | "flappy";
+  from: SessionId;
+  fromName: string;
+  to: SessionId;
+  /** True for the player who asked and is waiting for the other. */
+  waiting: boolean;
+}
 
 export interface FlappyView {
   id: string;
@@ -160,6 +170,8 @@ export interface FlappyView {
   winner: "you" | "them" | "draw" | null;
   /** Shown after the round. $0.05 from one selected chain to the other, or a deposit prompt. */
   stake?: string | null;
+  /** Play balance after the round, still held until they claim. */
+  balanceUsd?: string | null;
 }
 
 export interface StakeTransfer {
@@ -208,8 +220,11 @@ export type ServerMessage =
       challenges: ChallengeInfo[];
       snake: SnakeState | null;
       flappy: FlappyView | null;
+      bank: BankView;
+      rematch: RematchOffer | null;
     }
   | { type: "flappy"; flappy: FlappyView }
+  | { type: "rematch"; offer: RematchOffer | null }
   | { type: "snake"; match: SnakeState };
 
 export interface PresenceSnapshot {

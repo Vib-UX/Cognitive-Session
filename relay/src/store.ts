@@ -36,6 +36,7 @@ import type {
   SessionId,
   BankView,
   FlappyView,
+  RematchOffer,
   SessionIdentity,
   SnakeDir,
   SnakeState,
@@ -72,6 +73,13 @@ interface PendingDraw {
   at: number;
 }
 
+interface RematchWait {
+  game: "chess" | "flappy";
+  from: SessionId;
+  to: SessionId;
+  at: number;
+}
+
 const DRAW_WAIT_MS = 3 * 60 * 1000;
 
 function roomCode(): string {
@@ -88,7 +96,13 @@ export class RelayStore {
   private readonly notes = new Map<SessionId, string>();
   private readonly settled = new Set<string>();
 
-  constructor(private readonly options?: { draw?: boolean; bank?: PlayBank; requireDeposit?: boolean }) {
+  constructor(
+    private readonly options?: {
+      draw?: boolean;
+      bank?: PlayBank;
+      requireDeposit?: boolean;
+    },
+  ) {
     this.bank = options?.bank ?? new PlayBank();
   }
 
@@ -106,6 +120,7 @@ export class RelayStore {
   private flappies = new Map<string, FlappyContest>();
   private flappyByPlayer = new Map<SessionId, string>();
   private pending = new Map<`0x${string}`, PendingDraw>();
+  private rematches = new Map<string, RematchWait>();
   challenges = new Map<string, ChallengeInfo>();
 
   add(ws: WebSocket): void {
@@ -120,6 +135,7 @@ export class RelayStore {
       this.cancelDraw(conn.identity.id, "Your partner left before the draw.");
       this.dropSnakePlayer(conn.identity.id);
       this.abandonFlappy(conn.identity.id);
+      this.dropRematch(conn.identity.id);
       this.byId.delete(conn.identity.id);
       if (conn.roomCode) this.leaveRoom(conn);
     }
@@ -206,6 +222,9 @@ export class RelayStore {
         case "flappy_score":
           this.onFlappyScore(conn, msg.contestId, msg.score);
           break;
+        case "rematch":
+          this.onRematch(conn, msg.game);
+          break;
         default:
           this.send(ws, { type: "error", message: "Unknown message type" });
       }
@@ -254,7 +273,7 @@ export class RelayStore {
       this.notes.set(
         id,
         found.added > 0
-          ? `Deposit added on ${where}. Balance ${formatUsdc(units)}.`
+          ? `Deposit added on ${where}. Balance ${formatUsdc(units)}. A loss takes ${STAKE_USD}. Claim the rest whenever you want.`
           : `No new USDC yet. Send ${DEPOSIT_USD} USDC on ${where} to the treasury.`,
       );
       this.sendBank(conn);
@@ -624,6 +643,7 @@ export class RelayStore {
    */
   private onNext(conn: Conn): void {
     if (!conn.identity) throw new Error("Say hello first");
+    this.dropRematch(conn.identity.id);
     this.assertDeposit(conn);
     const me = conn.identity.id;
     this.queue = this.queue.filter((id) => id !== me);
@@ -844,6 +864,7 @@ export class RelayStore {
       themName: them.name,
       winner,
       stake: contest.status === "done" ? (this.transfers.get(id)?.line ?? null) : null,
+      balanceUsd: contest.status === "done" ? this.balanceUsdFor(id) : null,
     };
   }
 
@@ -867,6 +888,7 @@ export class RelayStore {
 
   private onFlappyJoin(conn: Conn): void {
     if (!conn.identity) throw new Error("Say hello first");
+    this.dropRematch(conn.identity.id);
     this.assertDeposit(conn);
     const me = conn.identity.id;
     const existing = this.flappyFor(me);
@@ -943,6 +965,8 @@ export class RelayStore {
       match,
       snake: this.snakeFor(conn),
       flappy: this.flappyView(conn.identity.id),
+      bank: this.bankView(conn),
+      rematch: this.rematchView(conn.identity.id),
       challenges: [...this.challenges.values()].filter(
         (c) => c.to === conn.identity!.id || c.from === conn.identity!.id,
       ),
@@ -977,6 +1001,156 @@ export class RelayStore {
     }
   }
 
+  private balanceUsdFor(id: SessionId): string | null {
+    const identity = this.byId.get(id)?.identity;
+    if (!identity?.walletAddress) return null;
+    return formatUsdc(this.bank.balanceOf(identity.walletAddress, identity.chainId ?? 8453));
+  }
+
+  private rematchKey(game: "chess" | "flappy", a: SessionId, b: SessionId): string {
+    const [x, y] = [a, b].sort();
+    return `${game}:${x}:${y}`;
+  }
+
+  private rematchView(id: SessionId): RematchOffer | null {
+    let found: RematchWait | null = null;
+    for (const offer of this.rematches.values()) {
+      if (offer.from !== id && offer.to !== id) continue;
+      if (!found || offer.at > found.at) found = offer;
+    }
+    if (!found) return null;
+    return {
+      game: found.game,
+      from: found.from,
+      fromName: this.byId.get(found.from)?.identity?.displayName ?? "Opponent",
+      to: found.to,
+      waiting: found.from === id,
+    };
+  }
+
+  private sendRematch(id: SessionId, offer: RematchOffer | null): void {
+    const conn = this.byId.get(id);
+    if (conn) this.send(conn.ws, { type: "rematch", offer });
+  }
+
+  /** Drop a pending rematch when this player leaves, queues, or finds someone else. */
+  private dropRematch(id: SessionId): void {
+    for (const [key, offer] of this.rematches) {
+      if (offer.from !== id && offer.to !== id) continue;
+      this.rematches.delete(key);
+      const otherId = offer.from === id ? offer.to : offer.from;
+      this.sendRematch(otherId, null);
+    }
+  }
+
+  private sweepRematch(now = Date.now()): void {
+    for (const [key, offer] of this.rematches) {
+      if (now - offer.at < 2 * 60 * 1000) continue;
+      this.rematches.delete(key);
+      this.sendRematch(offer.from, null);
+      this.sendRematch(offer.to, null);
+    }
+  }
+
+  private startChess(a: Conn, b: Conn): void {
+    if (!a.identity || !b.identity) throw new Error("Peer offline");
+    this.assertDeposit(a);
+    this.assertDeposit(b);
+    this.queue = this.queue.filter((id) => id !== a.identity!.id && id !== b.identity!.id);
+    const code = this.ensureSharedRoom(a, b);
+    const match = createMatch(code, a.identity.id, b.identity.id, "0");
+    this.matches.set(match.matchId, match);
+    const room = this.rooms.get(code);
+    if (room) {
+      room.matchId = match.matchId;
+      for (const id of room.members) {
+        const member = this.byId.get(id);
+        if (member) this.send(member.ws, { type: "room", room });
+      }
+    }
+    this.broadcastMatch(match);
+    this.sendQueue(a);
+    this.sendQueue(b);
+  }
+
+  private startFlappy(a: Conn, b: Conn): void {
+    if (!a.identity || !b.identity) throw new Error("Peer offline");
+    this.assertDeposit(a);
+    this.assertDeposit(b);
+    this.flappyQueue = this.flappyQueue.filter(
+      (id) => id !== a.identity!.id && id !== b.identity!.id,
+    );
+    const contest: FlappyContest = {
+      id: `flap_${randomBytes(3).toString("hex")}`,
+      seed: randomBytes(4).readUInt32BE(0) || 1,
+      status: "playing",
+      a: { id: a.identity.id, name: a.identity.displayName, score: null },
+      b: { id: b.identity.id, name: b.identity.displayName, score: null },
+      winner: null,
+    };
+    this.flappies.set(contest.id, contest);
+    this.flappyByPlayer.set(a.identity.id, contest.id);
+    this.flappyByPlayer.set(b.identity.id, contest.id);
+    this.sendFlappy(a);
+    this.sendFlappy(b);
+  }
+
+  private onRematch(conn: Conn, game: "chess" | "flappy"): void {
+    if (!conn.identity) throw new Error("Say hello first");
+    if (game !== "chess" && game !== "flappy") throw new Error("Rematch is chess or flappy");
+    this.assertDeposit(conn);
+    const me = conn.identity.id;
+    const opponentId = game === "chess" ? this.chessOpponent(conn) : this.flappyOpponent(me);
+    if (!opponentId) throw new Error("Finish a game before a rematch");
+    const opponent = this.byId.get(opponentId);
+    if (!opponent?.identity) throw new Error("Opponent left");
+    if (game === "chess" && this.activeMatch(opponent)) throw new Error("They are already in a game");
+    if (game === "flappy") {
+      const live = this.flappyFor(opponentId);
+      if (live?.status === "playing") throw new Error("They are already in a game");
+    }
+
+    if (game === "chess") {
+      this.queue = this.queue.filter((id) => id !== me);
+      this.cancelDraw(me, "");
+      this.sendQueue(conn);
+    } else {
+      this.flappyQueue = this.flappyQueue.filter((id) => id !== me);
+    }
+
+    const key = this.rematchKey(game, me, opponentId);
+    const waiting = this.rematches.get(key);
+    if (waiting?.from === opponentId && waiting.to === me && waiting.game === game) {
+      this.assertDeposit(opponent);
+      this.rematches.delete(key);
+      if (game === "chess") this.startChess(opponent, conn);
+      else this.startFlappy(opponent, conn);
+      this.sendRematch(me, null);
+      this.sendRematch(opponentId, null);
+      return;
+    }
+    if (waiting?.from === me) {
+      this.sendRematch(me, this.rematchView(me));
+      return;
+    }
+    const offer: RematchWait = { game, from: me, to: opponentId, at: Date.now() };
+    this.rematches.set(key, offer);
+    this.sendRematch(me, this.rematchView(me));
+    this.sendRematch(opponentId, this.rematchView(opponentId));
+  }
+
+  private chessOpponent(conn: Conn): SessionId | null {
+    const match = this.matchFor(conn);
+    if (!match || match.status !== "finished" || !conn.identity) return null;
+    return match.white === conn.identity.id ? match.black : match.white;
+  }
+
+  private flappyOpponent(id: SessionId): SessionId | null {
+    const contest = this.flappyFor(id);
+    if (!contest || contest.status !== "done") return null;
+    return contest.a.id === id ? contest.b.id : contest.a.id;
+  }
+
   private commitMatch(match: ChessState): void {
     const prev = this.matches.get(match.matchId);
     this.matches.set(match.matchId, match);
@@ -1009,7 +1183,7 @@ export class RelayStore {
       return id === winnerId ? "won" : "lost";
     };
     for (const id of [winnerId, loserId]) {
-      this.notes.delete(id);
+      this.notes.set(id, moved ? "Balance updated. Claim it whenever you want." : "");
       this.transfers.set(id, {
         id: key,
         you: you(id),
@@ -1134,6 +1308,7 @@ export class RelayStore {
     }
     this.sweepTimeouts();
     this.sweepDraws();
+    this.sweepRematch();
   }
 
   private sweepTimeouts(): void {
