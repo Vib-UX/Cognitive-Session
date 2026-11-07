@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type WebSocket from "ws";
-import { BASE_CCIP_TX_URL, PlayBank, STAKE_USDC, depositFromBlock, formatUsdc, logRanges, logSpan, transferHref, transferLine } from "./bank.js";
+import { BASE_CCIP_TX_URL, PlayBank, STAKE_USDC, ccipHref, depositFromBlock, formatUsdc, logRanges, logSpan, payoutReceipt, stakeChain, transferHref, transferLine, txHref } from "./bank.js";
 import { RelayStore } from "./store.js";
 import type { ServerMessage, SessionId } from "./types.js";
 
@@ -99,6 +99,21 @@ test("a dollar formats as $1.00 and a game as $0.05", () => {
     transferLine("lost", "Base", "Optimism"),
     `CCIP transaction: cross-chain transfer from your Base to their Optimism. ${BASE_CCIP_TX_URL}`,
   );
+});
+
+test("a send link is the chain transaction, or the CCIP message when the send crosses chains", () => {
+  const hash = `0x${"ab".repeat(32)}`;
+  const message = `0x${"cd".repeat(32)}`;
+  assert.equal(txHref("Base", hash), `https://basescan.org/tx/${hash}`);
+  assert.equal(txHref("Optimism", hash), `https://optimistic.etherscan.io/tx/${hash}`);
+  assert.equal(txHref("Base", "0x123"), null);
+  assert.equal(ccipHref(message), `https://ccip.chain.link/msg/${message}`);
+  assert.equal(ccipHref(`0x${"00".repeat(32)}`), null);
+  const same = payoutReceipt({ txHash: hash, chainName: "Base" }, "$1.05");
+  assert.equal(same?.href, `https://basescan.org/tx/${hash}`);
+  assert.equal(same?.ccipHref, null);
+  const crossed = payoutReceipt({ txHash: hash, chainName: "Base", messageId: message }, "$0.05");
+  assert.equal(crossed?.ccipHref, `https://ccip.chain.link/msg/${message}`);
 });
 
 test("a deposit is credited once and a short balance does not move", () => {
@@ -237,6 +252,42 @@ test("chess resign moves $0.05 to the player who stays", () => {
   assert.equal(last(ada.sent, "bank").bank.balanceUsd, "$0.95");
   assert.equal(last(bob.sent, "bank").bank.note, "Balance updated. Claim it whenever you want.");
   assert.match(last(bob.sent, "bank").bank.transfer?.line ?? "", /\$0\.05 from their Ethereum to your Polygon/);
+});
+
+test("a Claude loss or resign moves $0.05 from Optimism to Base", () => {
+  assert.equal(stakeChain({ host: "claude" }), 10);
+  assert.equal(stakeChain({ host: "cursor" }), 8453);
+  assert.equal(stakeChain({ host: "claude", chainId: 8453 }), 8453);
+  const bank = new PlayBank(null, async () => []);
+  bank.credit(ADA, ADA_TX, 1_000_000n, 10);
+  bank.credit(ADA, BOB_TX, 1_000_000n, 8453);
+  const store = new RelayStore({ bank });
+  const claude = fakeSocket();
+  const cursor = fakeSocket();
+  store.add(claude.ws);
+  store.add(cursor.ws);
+  store.handle(claude.ws, JSON.stringify({
+    type: "hello",
+    identity: { id: A, displayName: "claude", host: "claude", walletAddress: ADA },
+  }));
+  store.handle(cursor.ws, JSON.stringify({
+    type: "hello",
+    identity: { id: B, displayName: "cursor", host: "cursor", walletAddress: ADA, chainId: 8453 },
+  }));
+  store.handle(claude.ws, JSON.stringify({ type: "challenge", to: B, stakeWei: "0" }));
+  const challenge = last(cursor.sent, "challenge");
+  store.handle(cursor.ws, JSON.stringify({ type: "respond_challenge", challengeId: challenge.challenge.id, accept: true }));
+  const match = last(claude.sent, "match");
+  store.handle(claude.ws, JSON.stringify({ type: "resign", matchId: match.match.matchId }));
+  assert.equal(bank.balanceOf(ADA, 10), 950_000n);
+  assert.equal(bank.balanceOf(ADA, 8453), 1_050_000n);
+  assert.equal(last(claude.sent, "bank").bank.balanceUsd, "$0.95");
+  assert.equal(
+    last(claude.sent, "bank").bank.transfer?.line,
+    `CCIP transaction: cross-chain transfer from your Optimism to their Base. ${BASE_CCIP_TX_URL}`,
+  );
+  assert.equal(last(claude.sent, "bank").bank.transfer?.href, BASE_CCIP_TX_URL);
+  assert.equal(last(cursor.sent, "bank").bank.balanceUsd, "$1.05");
 });
 
 test("a rematch starts only after both players ask, and the claimable balance stays", () => {

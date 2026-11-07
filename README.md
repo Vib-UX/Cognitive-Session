@@ -31,7 +31,7 @@ SESSION_HOST=claude SESSION_DISPLAY_NAME=bob SESSION_DATA_DIR=/tmp/session-b \
 Or load the plugins:
 
 - Cursor: [packages/cursor-plugin](packages/cursor-plugin)
-- Claude Code: `claude --plugin-dir ./packages/claude-mod`, then `/session`
+- Claude Code: `npm install -g @hlvuser/session`, then `claude --plugin-dir "$(session-claude-mod)"`. From a checkout: `claude --plugin-dir ./packages/claude-mod`, then `/session`
 
 ## Step 1 demo
 

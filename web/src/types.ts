@@ -112,6 +112,8 @@ export interface FlappyView {
   them: number | null;
   themName: string | null;
   winner: "you" | "them" | "draw" | null;
+  stake?: string | null;
+  balanceUsd?: string | null;
 }
 
 export interface PresenceSnapshot {

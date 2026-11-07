@@ -301,13 +301,18 @@ export default function Board(props, surface) {
   }
   const state = surface.state || { focused: false, cursor: null, flappy: null };
 
-  if (
-    p.game === "flappy" &&
-    p.status === "playing" &&
-    p.contestId &&
-    (!state.flappy || state.flappy.contestId !== p.contestId)
-  ) {
-    surface.setState({ ...state, focused: true, flappy: startFlappy(p) });
+  if (p.game === "flappy") {
+    const fresh =
+      p.status === "playing" &&
+      p.contestId &&
+      (!state.flappy || state.flappy.contestId !== p.contestId);
+    if (fresh) {
+      surface.setState({ ...state, focused: true, flappy: startFlappy(p) });
+    } else if (p.status !== "playing" && state.flappy) {
+      surface.setState({ ...state, focused: false, flappy: null });
+    }
+  } else if (state.flappy) {
+    surface.setState({ ...state, flappy: null });
   }
 
   const live = () => surface.state || { focused: false, cursor: null };

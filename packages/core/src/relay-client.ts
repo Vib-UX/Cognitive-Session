@@ -10,6 +10,7 @@ import type {
   SessionIdentity,
   FlappyView,
   BankView,
+  RematchOffer,
   SnakeDir,
   SnakeState,
 } from "./types.js";
@@ -35,6 +36,7 @@ export class RelayClient {
   snake: SnakeState | null = null;
   flappy: FlappyView | null = null;
   bank: BankView | null = null;
+  rematch: RematchOffer | null = null;
   challenges: ChallengeInfo[] = [];
   seeking = false;
   waiting = 0;
@@ -178,6 +180,9 @@ export class RelayClient {
       case "bank":
         this.bank = msg.bank;
         break;
+      case "rematch":
+        this.rematch = msg.offer;
+        break;
       case "poll_state":
         this.peers = msg.peers;
         this.room = msg.room;
@@ -186,6 +191,8 @@ export class RelayClient {
         this.snake = msg.snake ?? null;
         this.flappy = msg.flappy ?? null;
         this.challenges = msg.challenges;
+        if (msg.bank) this.bank = msg.bank;
+        if ("rematch" in msg) this.rematch = msg.rematch ?? null;
         break;
       default:
         break;
@@ -307,6 +314,14 @@ export class RelayClient {
 
   flappyScore(contestId: string, score: number): void {
     this.send({ type: "flappy_score", contestId, score });
+  }
+
+  askRematch(game: "chess" | "flappy"): void {
+    this.send({ type: "rematch", game });
+  }
+
+  rematchAsync(game: "chess" | "flappy"): Promise<ServerMessage> {
+    return this.request("rematch", () => this.askRematch(game));
   }
 
   flappyScoreAsync(contestId: string, score: number): Promise<ServerMessage> {

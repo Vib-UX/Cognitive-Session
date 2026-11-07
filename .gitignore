@@ -16,3 +16,4 @@ typechain-types/
 .vite/
 *.tsbuildinfo
 .foundry/
+packages/claude-mod/vendor/

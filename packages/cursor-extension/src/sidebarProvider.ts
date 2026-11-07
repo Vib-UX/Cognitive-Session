@@ -81,6 +81,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "refresh":
           this.bridge.poll();
           break;
+        case "rematch":
+          if (msg.game === "chess" || msg.game === "flappy") this.bridge.askRematch(msg.game);
+          break;
         case "next": {
           const picked = this.prefs.get();
           if (picked.multiplayer && picked.games.includes("chess")) {
@@ -345,7 +348,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       <option value="10">Optimism</option>
       <option value="137">Polygon</option>
     </select>
-    <p class="empty" id="depositHint">Send $1.00 USDC on the chain you pick, to that chain's treasury. Claim pays you on the same chain.</p>
+    <p class="empty" id="depositHint">Send $1.00 USDC on the chain you pick, to that chain's treasury. After it lands, the $0.05 bet is sent to you.</p>
     <div class="mono addr" id="setupAddress">0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c</div>
     <div class="err" id="walletErr"></div>
     <button class="next" id="savePrefs" style="margin-top:0">Continue</button>
@@ -354,7 +357,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   <div class="card" id="bankCard">
     <h2 style="margin-top:0">Balance</h2>
     <div class="row"><span>Deposit</span><span class="mono" id="bankDeposit">$1.00</span></div>
-    <p class="empty" id="bankHint">Send $1.00 USDC on the chain you pick, to that chain's treasury. Claim pays you on the same chain.</p>
+    <p class="empty" id="bankHint">Send $1.00 USDC on the chain you pick, to that chain's treasury. After it lands, the $0.05 bet is sent to you.</p>
     <div class="mono addr" id="bankAddress">0xE2ca5C8ed8589Dc61abE1B2c2Dae309d2f86410c</div>
     <div class="actions">
       <button class="secondary" id="copyDeposit">Copy address</button>
@@ -377,6 +380,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   <div class="stack">
     <button class="next" id="playFlappy">Play flappy</button>
     <button class="next" id="next">Play</button>
+    <button class="next" id="rematch" style="display:none">Rematch</button>
   </div>
 
   <div class="actions">
@@ -422,6 +426,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     $('joinRoom').onclick = () => vscode.postMessage({ type: 'joinRoom', code: $('roomCode').value });
     $('leaveRoom').onclick = () => vscode.postMessage({ type: 'leaveRoom' });
     $('next').onclick = () => vscode.postMessage({ type: 'next' });
+    $('rematch').onclick = () => {
+      const game = rematchOffer && rematchOffer.game ? rematchOffer.game : lastGame;
+      vscode.postMessage({ type: 'rematch', game });
+    };
     $('claim').onclick = () => vscode.postMessage({ type: 'claim' });
     $('claimBalance').onclick = () => vscode.postMessage({ type: 'claimBalance' });
     $('checkDeposit').onclick = () => vscode.postMessage({ type: 'syncDeposit' });
@@ -454,8 +462,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const chainName = chainOption ? chainOption.textContent : 'your chain';
       const addr = treasuries[$('chain').value] || '';
       const text = addr
-        ? 'Send $1.00 USDC on ' + chainName + ' to this treasury. Claim pays you on ' + chainName + '.'
-        : chainName + ' has no treasury yet. Deposit USDC on Base or Optimism. Claim on ' + chainName + ' is sent over CCIP.';
+        ? 'Send $1.00 USDC on ' + chainName + ' to this treasury. After it lands, the $0.05 bet is sent to you.'
+        : chainName + ' has no treasury yet. Deposit USDC on Base or Optimism. The bet is sent to you over CCIP.';
       $('depositHint').textContent = text;
       $('bankHint').textContent = text;
       if (addr) {
@@ -466,6 +474,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     $('chain').onchange = paintDeposit;
 
     let prefs = { onboarded: false, games: ['chess'], multiplayer: true };
+    let rematchOffer = null;
+    let lastGame = 'chess';
     function chessMulti() {
       return prefs.multiplayer && prefs.games.indexOf('chess') !== -1;
     }
@@ -493,8 +503,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       $('bankBalance').textContent = view.balanceUsd || '$0.00';
       if (view.depositChain) {
         const text = view.address
-          ? 'Send $1.00 USDC on ' + view.depositChain + ' to this treasury. Claim pays you on ' + view.depositChain + '.'
-          : view.depositChain + ' has no treasury yet. Deposit USDC on Base or Optimism. Claim on ' + view.depositChain + ' is sent over CCIP.';
+          ? 'Send $1.00 USDC on ' + view.depositChain + ' to this treasury. After it lands, the $0.05 bet is sent to you.'
+          : view.depositChain + ' has no treasury yet. Deposit USDC on Base or Optimism. The bet is sent to you over CCIP.';
         $('bankHint').textContent = text;
         $('depositHint').textContent = text;
       }
@@ -507,9 +517,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       box.textContent = '';
       box.style.display = line ? '' : 'none';
       if (line) {
-        const match = String(line).match(/https:\/\/ccip\.chain\.link\/\S+/);
-        const url = (view.transfer && view.transfer.href) || (match && match[0]) || '';
-        const text = match ? String(line).slice(0, match.index).trim() : String(line);
+        const raw = String(line);
+        const at = raw.indexOf('https://ccip.chain.link/');
+        const url = (view.transfer && view.transfer.href) || (at >= 0 ? raw.slice(at).split(' ')[0] : '');
+        const text = at >= 0 ? raw.slice(0, at).trim() : raw;
         if (text) box.appendChild(document.createTextNode(text));
         if (url) {
           if (text) box.appendChild(document.createElement('br'));
@@ -592,6 +603,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           : s.seeking
             ? 'Waiting'
             : (s.waiting > 0 ? 'Connected · ' + s.waiting : 'Connected');
+      const chessOver = s.match && s.match.status === 'finished' && !s.seeking && !s.drawing;
+      const flapOver = s.flappy && s.flappy.status === 'done' && !s.flappy.seeking;
+      rematchOffer = s.rematch || null;
+      lastGame = s.lastGame || (flapOver && !chessOver ? 'flappy' : 'chess');
+      const showRematch = chessOver || flapOver;
+      $('rematch').style.display = showRematch ? '' : 'none';
+      $('rematch').textContent = s.rematch && s.rematch.waiting
+        ? 'Waiting for rematch…'
+        : (s.rematch ? 'Accept rematch' : 'Rematch');
       $('next').textContent = !chessMulti()
         ? 'Play'
         : s.drawing

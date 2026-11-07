@@ -208,6 +208,22 @@ export async function createSessionMcpServer(opts: McpServerOptions) {
   );
 
   server.tool(
+    "session_rematch",
+    "Ask the opponent from the finished chess or flappy game for a rematch. A new game starts when both players ask. The updated play balance stays claimable.",
+    { game: z.enum(["chess", "flappy"]) },
+    async ({ game }) => {
+      await session.relay.rematchAsync(game);
+      return json({
+        rematch: session.relay.rematch,
+        match: session.match(),
+        flappy: session.relay.flappy,
+        bank: session.relay.bank,
+        seeking: session.relay.seeking,
+      });
+    },
+  );
+
+  server.tool(
     "session_flappy_join",
     "Enter the flappy pairing queue. The first player waits. When another player also enters, both fly the same course on their own machines. The relay only compares the final scores.",
     {},

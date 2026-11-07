@@ -14,6 +14,7 @@ import type {
   SessionId,
   FlappyView,
   BankView,
+  RematchOffer,
   SnakeDir,
   SnakeState,
   UiState,
@@ -67,6 +68,8 @@ export class RelayBridge {
   snake: SnakeState | null = null;
   flappy: FlappyView | null = null;
   bank: BankView | null = null;
+  rematch: RematchOffer | null = null;
+  lastGame: "chess" | "flappy" | null = null;
   challenges: ChallengeInfo[] = [];
   error: string | null = null;
   seeking = false;
@@ -95,6 +98,8 @@ export class RelayBridge {
       snake: this.snake,
       flappy: this.flappy,
       challenges: this.challenges,
+      rematch: this.rematch,
+      lastGame: this.lastGame,
       error: this.error,
       seeking: this.seeking,
       waiting: this.waiting,
@@ -246,9 +251,11 @@ export class RelayBridge {
         break;
       case "match":
         this.match = msg.match;
+        if (msg.match.status === "finished") this.lastGame = "chess";
         if (msg.match.status !== "finished") {
           this.seeking = false;
           this.drawing = false;
+          if (this.rematch?.game === "chess") this.rematch = null;
         }
         break;
       case "snake":
@@ -257,6 +264,11 @@ export class RelayBridge {
         return;
       case "flappy":
         this.flappy = msg.flappy;
+        if (msg.flappy.status === "done") this.lastGame = "flappy";
+        if (msg.flappy.status === "playing" && this.rematch?.game === "flappy") this.rematch = null;
+        break;
+      case "rematch":
+        this.rematch = msg.offer;
         break;
       case "bank":
         this.bank = msg.bank;
@@ -283,6 +295,10 @@ export class RelayBridge {
         this.snake = msg.snake ?? null;
         this.flappy = msg.flappy ?? this.flappy;
         this.challenges = msg.challenges;
+        if (msg.bank) this.bank = msg.bank;
+        if ("rematch" in msg) this.rematch = msg.rematch ?? null;
+        if (msg.match?.status === "finished") this.lastGame = this.lastGame ?? "chess";
+        if (msg.flappy?.status === "done") this.lastGame = this.lastGame ?? "flappy";
         if (msg.match && msg.match.status !== "finished") this.drawing = false;
         break;
       case "error":
@@ -399,6 +415,12 @@ export class RelayBridge {
   flappyScore(contestId: string, score: number) {
     const points = Math.max(0, Math.floor(score));
     this.send({ type: "flappy_score", contestId, score: points });
+  }
+
+  /** Ask the last opponent for the same game again. The new round starts when they agree. */
+  askRematch(game: "chess" | "flappy") {
+    this.error = null;
+    this.send({ type: "rematch", game });
   }
 
   /**

@@ -32,6 +32,7 @@ function emptySnap() {
     match: null,
     flappy: null,
     bank: null,
+    rematch: null,
     seeking: false,
     waiting: 0,
     drawing: false,
@@ -150,11 +151,13 @@ function moveBetween(prevFen, nextFen) {
 function applySnap(data) {
   if (!data || typeof data !== "object") return;
   if (data.match && data.match.fen && data.match.fen !== seenFen) {
-    lastMove = data.match.matchId === lastMatchId ? moveBetween(seenFen, data.match.fen) : null;
+    const same = data.match.matchId === lastMatchId;
+    lastMove = same && data.match.status !== "finished" ? moveBetween(seenFen, data.match.fen) : null;
     lastMatchId = data.match.matchId;
     selected = null;
     seenFen = data.match.fen;
   }
+  if (data.match && data.match.status === "finished") selected = null;
   snap = {
     ...snap,
     ...data,
@@ -162,6 +165,7 @@ function applySnap(data) {
     legalMoves: Array.isArray(data.legalMoves) ? data.legalMoves : snap.legalMoves,
     flappy: data.flappy === undefined ? snap.flappy : data.flappy,
     bank: data.bank === undefined ? snap.bank : data.bank,
+    rematch: data.rematch === undefined ? snap.rematch : data.rematch,
   };
 }
 
@@ -319,7 +323,7 @@ function depositBlock($, ui) {
   const rows = [
     Text({
       key: "deposit-hint",
-      children: ["Send $1.00 USDC on Optimism to this treasury. Claim pays you on Optimism."],
+      children: [`Send $1.00 USDC on ${chainName} to this treasury. After it lands, the $0.05 bet is sent to you.`],
     }),
     Text({ key: "deposit-address", color: "claude", children: [address] }),
     Text({
@@ -438,6 +442,34 @@ function renderChess($, ui) {
           children: [`${label} · ${match.result.reason}`],
         }),
       );
+      const balance = snap.bank && snap.bank.balance && snap.bank.balance !== "0" ? snap.bank.balanceUsd : "";
+      if (balance) {
+        rows.push(
+          Text({
+            key: "claim-later",
+            color: "subtle",
+            children: [`Balance ${balance}. Claim it whenever you want.`],
+          }),
+        );
+      }
+      const transfer = snap.bank && snap.bank.transfer && snap.bank.transfer.line;
+      if (transfer) {
+        rows.push(Text({ key: "stake-transfer", color: "claude", children: [transfer] }));
+      }
+    }
+    if (match && match.result && !snap.seeking && !snap.drawing) {
+      const offer = snap.rematch && snap.rematch.game === "chess" ? snap.rematch : null;
+      rows.push(
+        Button({
+          key: "rematch",
+          label: offer && offer.waiting ? "Waiting for rematch…" : offer ? "Accept rematch" : "Rematch",
+          hotkey: "r",
+          onPress: act($, async () => {
+            applySnap(await callTool($, "session_rematch", { game: "chess" }));
+            await refresh($);
+          }),
+        }),
+      );
     }
     if (!snap.seeking && !snap.drawing) {
       rows.push(
@@ -449,7 +481,7 @@ function renderChess($, ui) {
         }),
       );
     }
-    if (!match) return rows;
+    return rows;
   }
 
   const color = myColor();
@@ -549,6 +581,12 @@ function renderChess($, ui) {
   return rows;
 }
 
+function flappyClaim(flap) {
+  const usd = (flap && flap.balanceUsd) || (snap.bank && snap.bank.balanceUsd) || "";
+  if (!usd || usd === "$0.00" || (snap.bank && snap.bank.balance === "0")) return "";
+  return ` Balance ${usd}. Claim it whenever you want.`;
+}
+
 function renderFlappy($, ui) {
   const { Text, Button, Client } = ui;
   const flap = snap.flappy;
@@ -558,11 +596,11 @@ function renderFlappy($, ui) {
     !flap || flap.status === "waiting"
       ? "Waiting for the other player to prompt."
       : flap.status === "done" && flap.winner === "you"
-        ? `You win ${flap.you} to ${flap.them}.`
+        ? `You win ${flap.you} to ${flap.them}.${flappyClaim(flap)}`
         : flap.status === "done" && flap.winner === "them"
-          ? `${flap.themName || "They"} win ${flap.them} to ${flap.you}.`
+          ? `${flap.themName || "They"} win ${flap.them} to ${flap.you}.${flappyClaim(flap)}`
           : flap.status === "done"
-            ? `Draw. ${flap.you} each.`
+            ? `Draw. ${flap.you} each.${flappyClaim(flap)}`
             : flap.you == null
               ? `Flying against ${flap.themName || "the other player"}. The relay compares the final scores.`
               : `You scored ${flap.you}. Waiting for ${flap.themName || "them"}.`;
@@ -584,14 +622,29 @@ function renderFlappy($, ui) {
     }),
   );
   if (!playing) {
+    const done = flap && flap.status === "done";
+    const offer = snap.rematch && snap.rematch.game === "flappy" ? snap.rematch : null;
     rows.push(
       Button({
         key: "find-flappy",
-        label: "Find a player",
+        label: done ? "New opponent" : "Find a player",
         hotkey: "f",
         onPress: act($, () => startFromPrompt($)),
       }),
     );
+    if (done) {
+      rows.push(
+        Button({
+          key: "rematch-flappy",
+          label: offer && offer.waiting ? "Waiting for rematch…" : offer ? "Accept rematch" : "Rematch",
+          hotkey: "r",
+          onPress: act($, async () => {
+            applySnap(await callTool($, "session_rematch", { game: "flappy" }));
+            await refresh($);
+          }),
+        }),
+      );
+    }
   }
   return rows;
 }
@@ -694,7 +747,7 @@ export function register(on, options = {}) {
         (pendingFlappy ||
           flap?.status === "waiting" ||
           (flap?.status === "playing" && flap.you != null && flap.them == null));
-      const hot = flappyHot || snap.seeking || snap.drawing || liveChess();
+      const hot = flappyHot || snap.seeking || snap.drawing || liveChess() || Boolean(snap.rematch);
       if (!hot && tickN % 5 !== 0) return;
       enqueue(async () => {
         if (pendingFlappy) await flushFlappy($);

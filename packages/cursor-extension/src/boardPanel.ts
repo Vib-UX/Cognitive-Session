@@ -5,10 +5,19 @@ import type { GameId, PrefsStore, SessionPrefs } from "./prefs";
 import type { RelayBridge } from "./relayBridge";
 import type { ChessState, UiState } from "./types";
 
+const TX_LINK =
+  /^https:\/\/(?:ccip\.chain\.link\/msg\/|basescan\.org\/tx\/|etherscan\.io\/tx\/|optimistic\.etherscan\.io\/tx\/|arbiscan\.io\/tx\/|polygonscan\.com\/tx\/)0x[a-fA-F0-9]{64}\/?$/;
+
+function sessionTxUrl(raw: string): string | null {
+  const href = raw.trim();
+  return TX_LINK.test(href) ? href.replace(/\/$/, "") : null;
+}
+
 export class BoardPanel {
   public static current: BoardPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
   private unsub?: () => void;
+  private unsubBank?: () => void;
   private unsubPrefs?: () => void;
   private pendingGame: GameId | null = null;
 
@@ -23,6 +32,9 @@ export class BoardPanel {
     this.panel.webview.html = this.html();
 
     this.unsub = this.bridge.onChange((state, kind) => this.postState(state, kind));
+    this.unsubBank = this.bridge.onBank((view) => {
+      this.panel.webview.postMessage({ type: "bank", bank: view });
+    });
 
     this.panel.webview.onDidReceiveMessage((msg) => {
       switch (msg.type) {
@@ -46,14 +58,23 @@ export class BoardPanel {
         case "flappyJoin":
           this.bridge.flappyJoin();
           break;
+        case "rematch":
+          if (msg.game === "chess" || msg.game === "flappy") this.bridge.askRematch(msg.game);
+          break;
         case "flappyScore":
           if (typeof msg.contestId === "string" && Number.isFinite(Number(msg.score))) {
             this.bridge.flappyScore(String(msg.contestId), Number(msg.score));
           }
           break;
+        case "openLink": {
+          const href = sessionTxUrl(String(msg.href ?? ""));
+          if (href) void vscode.env.openExternal(vscode.Uri.parse(href));
+          break;
+        }
         case "ready":
           this.postPrefs(this.prefs.get());
           this.postState(this.bridge.state);
+          if (this.bridge.bank) this.panel.webview.postMessage({ type: "bank", bank: this.bridge.bank });
           if (this.pendingGame) {
             this.panel.webview.postMessage({ type: "deal", game: this.pendingGame });
           }
@@ -73,6 +94,7 @@ export class BoardPanel {
 
     this.panel.onDidDispose(() => {
       this.unsub?.();
+      this.unsubBank?.();
       this.unsubPrefs?.();
       BoardPanel.current = undefined;
     });
@@ -198,6 +220,17 @@ export class BoardPanel {
       width: max-content;
       user-select: none;
       border-radius: 2px;
+    }
+    .tx-trail {
+      width: 512px;
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .tx-row { margin-top: 8px; }
+    .tx-row a {
+      color: var(--vscode-textLink-foreground);
+      word-break: break-all;
     }
     .sq {
       width: 64px; height: 64px;
@@ -326,6 +359,7 @@ export class BoardPanel {
       <div class="playerbar" id="topBar" style="display:none"><span class="pname" id="topName">Opponent</span><span class="clock" id="topClock">2:00</span></div>
       <div class="board" id="board"></div>
       <div class="playerbar" id="botBar" style="display:none"><span class="pname" id="botName">You</span><span class="clock" id="botClock">2:00</span></div>
+      <div class="tx-trail" id="txTrail" style="display:none"></div>
     </div>
     <div class="meta">
       <div class="card" id="info">No active match</div>
@@ -335,6 +369,7 @@ export class BoardPanel {
         <div>
           <button id="play">Play move</button>
           <button id="next">Next</button>
+          <button id="rematch" style="display:none">Rematch</button>
           <button id="resign">Resign</button>
           <button id="refresh">Refresh</button>
         </div>
@@ -348,6 +383,7 @@ export class BoardPanel {
     <div class="flappy-meta" id="flappyStatus">Waiting for another player.</div>
     <div class="actions" style="margin-top:8px">
       <button id="flappyJoin">Find a player</button>
+      <button id="flappyRematch" style="display:none">Rematch</button>
       <button id="flappyFlap" class="secondary">Flap</button>
     </div>
   </div>
@@ -524,10 +560,85 @@ export class BoardPanel {
       $('mateNote').textContent = 'Not mate.';
     }
 
+    let bank = null;
+    function paintTx() {
+      const box = $('txTrail');
+      if (!box) return;
+      box.textContent = '';
+      const rows = [];
+      const transfer = bank && bank.transfer;
+      if (transfer && typeof transfer.href === 'string' && transfer.href.indexOf('https://ccip.chain.link/') === 0) {
+        rows.push({ label: 'CCIP transaction', href: transfer.href });
+      }
+      const payout = bank && bank.payout;
+      const ccip = payout && typeof payout.ccipHref === 'string' ? payout.ccipHref : '';
+      if (ccip.indexOf('https://ccip.chain.link/') === 0 && !rows.some((row) => row.href === ccip)) {
+        rows.push({ label: 'CCIP transaction', href: ccip });
+      }
+      if (payout && typeof payout.href === 'string' && payout.href.indexOf('https://') === 0) {
+        const usd = payout.usd ? payout.usd + ' ' : '';
+        const chain = payout.chainName ? 'on ' + payout.chainName : '';
+        rows.push({ label: ('Sent ' + usd + chain).trim(), href: payout.href });
+      }
+      if (!rows.length) {
+        box.style.display = 'none';
+        return;
+      }
+      box.style.display = '';
+      rows.forEach((row) => {
+        const block = document.createElement('div');
+        block.className = 'tx-row';
+        const title = document.createElement('div');
+        title.textContent = row.label;
+        const link = document.createElement('a');
+        link.href = row.href;
+        link.textContent = row.href;
+        link.addEventListener('click', (event) => {
+          event.preventDefault();
+          vscode.postMessage({ type: 'openLink', href: row.href });
+        });
+        block.append(title, link);
+        box.append(block);
+      });
+    }
+    function claimLine() {
+      if (!bank || !bank.balance || bank.balance === '0') return '';
+      return '<div>Balance ' + bank.balanceUsd + '. Claim it whenever you want.</div>';
+    }
+    function claimSuffix(view) {
+      const fromView = view && view.balanceUsd && view.balanceUsd !== '$0.00' ? view.balanceUsd : '';
+      const fromBank = bank && bank.balance && bank.balance !== '0' ? bank.balanceUsd : '';
+      const usd = fromView || fromBank;
+      if (!usd) return '';
+      return ' Balance ' + usd + '. Claim it whenever you want.';
+    }
+    function rematchLabel(game) {
+      const offer = state && state.rematch;
+      if (!offer || offer.game !== game) return 'Rematch';
+      return offer.waiting ? 'Waiting for rematch…' : 'Accept rematch';
+    }
+    function paintRematch() {
+      const match = state && state.match;
+      const waiting = state && state.seeking && (!match || match.status === 'finished');
+      const chessBtn = $('rematch');
+      if (chessBtn) {
+        const show = match && match.status === 'finished' && !waiting;
+        chessBtn.style.display = show ? '' : 'none';
+        chessBtn.textContent = rematchLabel('chess');
+      }
+      const flapBtn = $('flappyRematch');
+      if (flapBtn) {
+        const done = flappyView && flappyView.status === 'done' && !(flappyView.seeking);
+        flapBtn.style.display = done ? '' : 'none';
+        flapBtn.textContent = rematchLabel('flappy');
+      }
+    }
+
     function render() {
       const match = state && state.match;
       const me = state && state.me;
       $('me').textContent = me ? ((me.ensName || me.displayName) + ' · ' + me.id) : '';
+      paintRematch();
       if (activeGame !== 'chess') return;
       const waiting = state && state.seeking && (!match || match.status === 'finished');
       if (!match || waiting) {
@@ -557,7 +668,8 @@ export class BoardPanel {
         '<div><strong>' + match.matchId + '</strong></div>' +
         '<div class="mono">W ' + match.white + '</div>' +
         '<div class="mono">B ' + match.black + '</div>' +
-        (match.result ? '<div>' + JSON.stringify(match.result) + '</div>' : '');
+        (match.result ? '<div>' + chessResult(match, me) + '</div>' : '') +
+        (match.status === 'finished' ? claimLine() : '');
       paintClocks();
 
       const grid = fenToGrid(match.fen);
@@ -595,6 +707,14 @@ export class BoardPanel {
           board.append(sq);
         }
       }
+    }
+
+    function chessResult(match, me) {
+      const result = match.result;
+      if (!result) return '';
+      if (result.kind === 'draw') return 'Draw · ' + result.reason;
+      const won = me && result.winner === me.id;
+      return (won ? 'You won' : 'You lost') + ' · ' + result.reason;
     }
 
     function onSquare(name, piece, myColor, match) {
@@ -1321,9 +1441,9 @@ export class BoardPanel {
       const game = flappyRound && flappyRound.game;
       const stake = view && view.stake ? ' ' + view.stake : '';
       if (!view || view.status === 'waiting' || view.seeking) return 'Waiting for another player.';
-      if (view.winner === 'you') return 'You win ' + view.you + ' to ' + view.them + '.' + stake;
-      if (view.winner === 'them') return (view.themName || 'They') + ' wins ' + view.them + ' to ' + view.you + '.' + stake;
-      if (view.winner === 'draw') return 'Draw, ' + view.you + ' each';
+      if (view.winner === 'you') return 'You win ' + view.you + ' to ' + view.them + '.' + stake + claimSuffix(view);
+      if (view.winner === 'them') return (view.themName || 'They') + ' wins ' + view.them + ' to ' + view.you + '.' + stake + claimSuffix(view);
+      if (view.winner === 'draw') return 'Draw, ' + view.you + ' each.' + claimSuffix(view);
       if (game && game.over) return 'You scored ' + game.score + '. Waiting for ' + (view.themName || 'them') + '.';
       if (game) return 'Score ' + game.score;
       if (view.you != null) return 'You scored ' + view.you + '. Waiting for ' + (view.themName || 'them') + '.';
@@ -1333,6 +1453,7 @@ export class BoardPanel {
       const canvas = $('flappyCanvas');
       const status = $('flappyStatus');
       if (status) status.textContent = flappyLine();
+      paintRematch();
       if (!canvas) return;
       const cssW = canvas.clientWidth;
       if (cssW < 10) return;
@@ -1425,6 +1546,8 @@ export class BoardPanel {
       if (lastMatchId) vscode.postMessage({ type: 'resign', matchId: lastMatchId });
     };
     $('next').onclick = () => vscode.postMessage({ type: 'next' });
+    $('rematch').onclick = () => vscode.postMessage({ type: 'rematch', game: 'chess' });
+    $('flappyRematch').onclick = () => vscode.postMessage({ type: 'rematch', game: 'flappy' });
     $('refresh').onclick = () => vscode.postMessage({ type: 'refresh' });
     $('sudoNew').onclick = () => newSudoku();
     $('brainNew').onclick = () => newBrain();
@@ -1455,6 +1578,14 @@ export class BoardPanel {
         showGame(msg.game);
         return;
       }
+      if (msg.type === 'bank') {
+        bank = msg.bank;
+        paintTx();
+        paintRematch();
+        if (activeGame === 'chess') render();
+        else if (activeGame === 'flappy') drawFlappy();
+        return;
+      }
       if (msg.type === 'credit') return;
       if (msg.type === 'deal') {
         showGame(msg.game);
@@ -1467,7 +1598,11 @@ export class BoardPanel {
       if (msg.type !== 'state') return;
       state = msg.state;
       if (state && state.flappy) applyFlappy(state.flappy);
-      if (activeGame === 'flappy') return;
+      paintRematch();
+      if (activeGame === 'flappy') {
+        drawFlappy();
+        return;
+      }
       selected = null;
       render();
     });

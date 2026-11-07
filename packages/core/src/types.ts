@@ -147,8 +147,17 @@ export type ClientMessage =
   | { type: "snake_leave" }
   | { type: "flappy_join" }
   | { type: "flappy_score"; contestId: string; score: number }
+  | { type: "rematch"; game: "chess" | "flappy" }
   | { type: "sync_deposit" }
   | { type: "claim_balance" };
+
+export interface RematchOffer {
+  game: "chess" | "flappy";
+  from: SessionId;
+  fromName: string;
+  to: SessionId;
+  waiting: boolean;
+}
 
 export interface FlappyView {
   id: string;
@@ -160,6 +169,7 @@ export interface FlappyView {
   themName: string | null;
   winner: "you" | "them" | "draw" | null;
   stake?: string | null;
+  balanceUsd?: string | null;
 }
 
 export interface BankView {
@@ -173,6 +183,7 @@ export interface BankView {
   canPlay: boolean;
   claimLabel: string;
   transfer: { id: string; you: "won" | "lost" | "short"; fromChain: string; toChain: string; line: string; href?: string | null } | null;
+  payout?: { txHash: string; chainName: string; usd: string; href: string; ccipHref?: string | null } | null;
   note: string;
 }
 
@@ -199,8 +210,11 @@ export type ServerMessage =
       challenges: ChallengeInfo[];
       snake: SnakeState | null;
       flappy?: FlappyView | null;
+      bank?: BankView;
+      rematch?: RematchOffer | null;
     }
-  | { type: "flappy"; flappy: FlappyView };
+  | { type: "flappy"; flappy: FlappyView }
+  | { type: "rematch"; offer: RematchOffer | null };
 
 export interface PresenceSnapshot {
   peers: PeerInfo[];

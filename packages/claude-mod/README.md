@@ -5,7 +5,13 @@ One pane for two players. `/session` opens it. Pick **Chess** or **Flappy**, the
 ## Install
 
 ```bash
-# from the repo root
+npm install -g @hlvuser/session
+claude --plugin-dir "$(session-claude-mod)"
+```
+
+From a checkout of this repo:
+
+```bash
 pnpm --filter @session/core build
 claude --plugin-dir ./packages/claude-mod
 ```

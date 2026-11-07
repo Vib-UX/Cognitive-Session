@@ -152,6 +152,7 @@ export class SessionClient {
       legalMoves,
       flappy: this.relay.flappy,
       bank: this.relay.bank,
+      rematch: this.relay.rematch,
     };
   }
 

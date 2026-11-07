@@ -93,6 +93,12 @@ export function formatUsdc(units: bigint): string {
   return `${negative ? "-" : ""}$${whole}.${frac}`;
 }
 
+/** Claude plays from Optimism. Cursor plays from Base. An explicit chainId wins. */
+export function stakeChain(identity?: { host?: string; chainId?: number } | null): number {
+  if (typeof identity?.chainId === "number" && identity.chainId > 0) return identity.chainId;
+  return identity?.host === "claude" ? 10 : 8453;
+}
+
 export function chainLabel(chainId?: number): string {
   switch (chainId) {
     case 1:
@@ -117,6 +123,43 @@ export function chainLabel(chainId?: number): string {
 export function transferHref(fromChain: string, toChain: string): string | null {
   if (fromChain === toChain || (fromChain !== "Base" && toChain !== "Base")) return null;
   return BASE_CCIP_TX_URL;
+}
+
+const TX_EXPLORER: Record<string, string> = {
+  Ethereum: "https://etherscan.io/tx/",
+  Base: "https://basescan.org/tx/",
+  Arbitrum: "https://arbiscan.io/tx/",
+  Optimism: "https://optimistic.etherscan.io/tx/",
+  Polygon: "https://polygonscan.com/tx/",
+};
+
+/** Explorer link for a send on that chain. */
+export function txHref(chainName: string, txHash: string): string | null {
+  if (!/^0x[a-fA-F0-9]{64}$/.test(txHash)) return null;
+  const base = TX_EXPLORER[chainName];
+  return base ? `${base}${txHash}` : null;
+}
+
+/** CCIP explorer link for a cross-chain send. */
+export function ccipHref(messageId?: string): string | null {
+  if (!messageId || !/^0x[a-fA-F0-9]{64}$/.test(messageId) || /^0x0{64}$/.test(messageId)) return null;
+  return `https://ccip.chain.link/msg/${messageId}`;
+}
+
+/** The link to show after a claim: the CCIP message when the send crosses chains, otherwise the chain transaction. */
+export function payoutReceipt(
+  paid: { txHash: string; chainName: string; messageId?: string },
+  usd: string,
+): { txHash: string; chainName: string; usd: string; href: string; ccipHref: string | null } | null {
+  const href = txHref(paid.chainName, paid.txHash);
+  if (!href) return null;
+  return {
+    txHash: paid.txHash,
+    chainName: paid.chainName,
+    usd,
+    href,
+    ccipHref: ccipHref(paid.messageId),
+  };
 }
 
 export function transferLine(you: "won" | "lost" | "short", fromChain: string, toChain: string): string {

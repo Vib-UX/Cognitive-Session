@@ -184,6 +184,16 @@ export interface StakeTransfer {
   href?: string | null;
 }
 
+export interface PayoutReceipt {
+  txHash: string;
+  chainName: string;
+  usd: string;
+  /** Chain explorer link for the send. */
+  href: string;
+  /** CCIP explorer link when that send crosses chains. */
+  ccipHref?: string | null;
+}
+
 export interface BankView {
   depositUsd: string;
   stakeUsd: string;
@@ -195,6 +205,8 @@ export interface BankView {
   canPlay: boolean;
   claimLabel: string;
   transfer: StakeTransfer | null;
+  /** Last claim. The session shows this link under the chess board. */
+  payout: PayoutReceipt | null;
   note: string;
 }
 

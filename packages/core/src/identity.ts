@@ -32,6 +32,10 @@ export function loadOrCreateIdentity(
       raw.displayName = displayName;
       writeFileSync(path, JSON.stringify(raw, null, 2));
     }
+    if (!raw.chainId) {
+      raw.chainId = host === "claude" ? 10 : 8453;
+      writeFileSync(path, JSON.stringify(raw, null, 2));
+    }
     return raw;
   }
 
@@ -39,6 +43,7 @@ export function loadOrCreateIdentity(
     id: newSessionId(),
     displayName: displayName ?? `${host}-${randomBytes(2).toString("hex")}`,
     host,
+    chainId: host === "claude" ? 10 : 8453,
   };
   writeFileSync(path, JSON.stringify(identity, null, 2));
   return identity;

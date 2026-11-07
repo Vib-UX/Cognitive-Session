@@ -103,6 +103,8 @@ export function FlappyTable() {
   const [score, setScore] = useState<number | null>(null);
   const [line, setLine] = useState("Same course. Higher score wins.");
   const [error, setError] = useState<string | null>(null);
+  const [balance, setBalance] = useState<string | null>(null);
+  const [rematchOffer, setRematchOffer] = useState<{ waiting?: boolean; fromName?: string } | null>(null);
 
   function syncHud(nextView: FlappyView | null, game: FlappyGame | null) {
     setLine(resultLine(nextView, game));
@@ -202,7 +204,13 @@ export function FlappyTable() {
       );
     };
     ws.onmessage = (ev) => {
-      let msg: { type: string; flappy?: FlappyView; message?: string };
+      let msg: {
+        type: string;
+        flappy?: FlappyView;
+        message?: string;
+        bank?: { balanceUsd?: string };
+        offer?: { waiting?: boolean; fromName?: string } | null;
+      };
       try {
         msg = JSON.parse(String(ev.data));
       } catch {
@@ -212,7 +220,13 @@ export function FlappyTable() {
         ws.send(JSON.stringify({ type: "flappy_join" }));
         setJoined(true);
       } else if (msg.type === "flappy" && msg.flappy) {
+        if (msg.flappy.balanceUsd) setBalance(msg.flappy.balanceUsd);
+        if (msg.flappy.status === "playing") setRematchOffer(null);
         applyView(msg.flappy);
+      } else if (msg.type === "bank" && msg.bank?.balanceUsd) {
+        setBalance(msg.bank.balanceUsd);
+      } else if (msg.type === "rematch") {
+        setRematchOffer(msg.offer ?? null);
       } else if (msg.type === "error" && msg.message) {
         setError(msg.message);
       }
@@ -238,7 +252,12 @@ export function FlappyTable() {
     roundRef.current = null;
     postedRef.current = null;
     setScore(null);
+    setRematchOffer(null);
     wsRef.current?.send(JSON.stringify({ type: "flappy_join" }));
+  }
+
+  function rematch() {
+    wsRef.current?.send(JSON.stringify({ type: "rematch", game: "flappy" }));
   }
 
   const done = view?.status === "done" || Boolean(roundRef.current?.game.over && view?.winner);
@@ -274,14 +293,22 @@ export function FlappyTable() {
             <div className="room-code">{score ?? "–"}</div>
             <div className="flappy-status">{line}</div>
             {view?.them != null && <div className="hint">{view.themName || "Them"} {view.them}</div>}
+            {done && balance && balance !== "$0.00" && (
+              <div className="hint">Balance {balance}. Claim it whenever you want.</div>
+            )}
             <div className="actions">
               <button type="button" onClick={() => flapNow()}>
                 Flap
               </button>
               {(view?.status === "done" || done) && (
-                <button type="button" className="primary" onClick={again}>
-                  Again
-                </button>
+                <>
+                  <button type="button" className="primary" onClick={rematch}>
+                    {rematchOffer?.waiting ? "Waiting for rematch…" : rematchOffer ? "Accept rematch" : "Rematch"}
+                  </button>
+                  <button type="button" onClick={again}>
+                    New opponent
+                  </button>
+                </>
               )}
             </div>
           </aside>

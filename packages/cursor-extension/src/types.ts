@@ -92,6 +92,15 @@ export interface FlappyView {
   themName: string | null;
   winner: "you" | "them" | "draw" | null;
   stake?: string | null;
+  balanceUsd?: string | null;
+}
+
+export interface RematchOffer {
+  game: "chess" | "flappy";
+  from: SessionId;
+  fromName: string;
+  to: SessionId;
+  waiting: boolean;
 }
 
 export interface StakeTransfer {
@@ -114,6 +123,7 @@ export interface BankView {
   canPlay?: boolean;
   claimLabel: string;
   transfer: StakeTransfer | null;
+  payout?: { txHash: string; chainName: string; usd: string; href: string; ccipHref?: string | null } | null;
   note: string;
 }
 
@@ -149,9 +159,12 @@ export type ServerMessage =
       challenges: ChallengeInfo[];
       snake?: SnakeState | null;
       flappy?: FlappyView | null;
+      bank?: BankView;
+      rematch?: RematchOffer | null;
     }
   | { type: "snake"; match: SnakeState }
-  | { type: "flappy"; flappy: FlappyView };
+  | { type: "flappy"; flappy: FlappyView }
+  | { type: "rematch"; offer: RematchOffer | null };
 
 export interface UiState {
   connected: boolean;
@@ -163,6 +176,8 @@ export interface UiState {
   snake: SnakeState | null;
   flappy: FlappyView | null;
   challenges: ChallengeInfo[];
+  rematch: RematchOffer | null;
+  lastGame: "chess" | "flappy" | null;
   error: string | null;
   /** This window pressed Next and is waiting for a partner or a draw. */
   seeking: boolean;

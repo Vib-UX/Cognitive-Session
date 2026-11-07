@@ -9,6 +9,8 @@ import {
   STAKE_USDC,
   chainLabel,
   formatUsdc,
+  payoutReceipt,
+  stakeChain,
   transferHref,
   transferLine,
 } from "./bank.js";
@@ -36,6 +38,7 @@ import type {
   SessionId,
   BankView,
   FlappyView,
+  PayoutReceipt,
   RematchOffer,
   SessionIdentity,
   SnakeDir,
@@ -93,6 +96,7 @@ function roomCode(): string {
 export class RelayStore {
   private readonly bank: PlayBank;
   private readonly transfers = new Map<SessionId, StakeTransfer>();
+  private readonly payouts = new Map<SessionId, PayoutReceipt>();
   private readonly notes = new Map<SessionId, string>();
   private readonly settled = new Set<string>();
 
@@ -265,7 +269,7 @@ export class RelayStore {
       return;
     }
     try {
-      const chainId = conn.identity?.chainId ?? 8453;
+      const chainId = stakeChain(conn.identity);
       const found = await this.bank.pull(wallet, chainId);
       if (quiet && found.added === 0) return;
       const units = this.bank.balanceOf(wallet, chainId);
@@ -287,7 +291,7 @@ export class RelayStore {
   private async onClaimBalance(conn: Conn): Promise<void> {
     const id = conn.identity?.id;
     const wallet = conn.identity?.walletAddress;
-    const chainId = conn.identity?.chainId;
+    const chainId = stakeChain(conn.identity);
     if (!id || !wallet || !chainId) {
       this.send(conn.ws, {
         type: "error",
@@ -304,6 +308,8 @@ export class RelayStore {
       this.bank.finishClaim(wallet, chainId);
       const usd = formatUsdc(reserved);
       const tx = `${paid.txHash.slice(0, 6)}…${paid.txHash.slice(-4)}`;
+      const receipt = payoutReceipt(paid, usd);
+      if (receipt) this.payouts.set(id, receipt);
       this.notes.set(id, `${usd} USDC on ${paid.chainName}. ${tx}`);
       this.sendBank(conn);
       this.send(conn.ws, { type: "bank_paid", txHash: paid.txHash, chainName: paid.chainName, usd });
@@ -992,7 +998,7 @@ export class RelayStore {
   /** The ledger must cover $0.05. The deposit is USDC on the chain they picked, when that chain has a treasury. */
   private assertDeposit(conn: Conn): void {
     if (!this.options?.requireDeposit) return;
-    const chainId = conn.identity?.chainId ?? 8453;
+    const chainId = stakeChain(conn.identity);
     const home = treasuryHome(chainId);
     const wallet = conn.identity?.walletAddress;
     if (!wallet || this.bank.balanceOf(wallet, chainId) < STAKE_USDC) {
@@ -1004,7 +1010,7 @@ export class RelayStore {
   private balanceUsdFor(id: SessionId): string | null {
     const identity = this.byId.get(id)?.identity;
     if (!identity?.walletAddress) return null;
-    return formatUsdc(this.bank.balanceOf(identity.walletAddress, identity.chainId ?? 8453));
+    return formatUsdc(this.bank.balanceOf(identity.walletAddress, stakeChain(identity)));
   }
 
   private rematchKey(game: "chess" | "flappy", a: SessionId, b: SessionId): string {
@@ -1168,15 +1174,16 @@ export class RelayStore {
     this.settled.add(key);
     const winner = this.byId.get(winnerId)?.identity;
     const loser = this.byId.get(loserId)?.identity;
-    const fromChain = chainLabel(loser?.chainId);
-    const toChain = chainLabel(winner?.chainId);
+    const fromId = stakeChain(loser);
+    const toId = stakeChain(winner);
+    const fromChain = chainLabel(fromId);
+    const toChain = chainLabel(toId);
     const loserWallet = loser?.walletAddress;
     const winnerWallet = winner?.walletAddress;
     const moved = Boolean(
       loserWallet &&
         winnerWallet &&
-        loserWallet.toLowerCase() !== winnerWallet.toLowerCase() &&
-        this.bank.take(loserWallet, winnerWallet, STAKE_USDC, loser?.chainId ?? 8453, winner?.chainId ?? 8453),
+        this.bank.take(loserWallet, winnerWallet, STAKE_USDC, fromId, toId),
     );
     const you = (id: SessionId): StakeTransfer["you"] => {
       if (!moved) return "short";
@@ -1199,7 +1206,7 @@ export class RelayStore {
 
   private bankView(conn: Conn): BankView {
     const wallet = conn.identity?.walletAddress;
-    const chainId = conn.identity?.chainId ?? 8453;
+    const chainId = stakeChain(conn.identity);
     const units = wallet ? this.bank.balanceOf(wallet, chainId) : 0n;
     const id = conn.identity?.id;
     const home = treasuryHome(chainId);
@@ -1214,6 +1221,7 @@ export class RelayStore {
       canPlay: units >= STAKE_USDC,
       claimLabel: units > 0n ? `Claim ${formatUsdc(units)}` : "Claim",
       transfer: id ? (this.transfers.get(id) ?? null) : null,
+      payout: id ? (this.payouts.get(id) ?? null) : null,
       note: id ? (this.notes.get(id) ?? "") : "",
     };
   }
